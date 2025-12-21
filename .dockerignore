@@ -1,0 +1,48 @@
+# .dockerignore for BrotherAdapter
+# Exclude unnecessary files from Docker build context
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+docs/
+README.md
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Build outputs
+bin/
+obj/
+*.dll
+*.exe
+*.pdb
+
+# Test files
+tests/
+test/
+*.Tests.csproj
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Misc
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
