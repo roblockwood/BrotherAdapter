@@ -146,6 +146,9 @@ namespace BrotherConnection
                         }
                     }
                 } //*/
+                
+                // Update MTConnect server with decoded data
+                mtconnectServer.UpdateData(DecodedResults);
 
                 /*
                 var filesToLoad = new List<String>
