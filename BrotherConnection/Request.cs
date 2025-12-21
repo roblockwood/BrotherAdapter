@@ -20,8 +20,8 @@ namespace BrotherConnection
             var ip = Environment.GetEnvironmentVariable("CNC_IP_ADDRESS");
             if (string.IsNullOrEmpty(ip))
             {
-                // Fallback to default if not set
-                ip = "10.0.0.25";
+                // Fallback to default if not set (real machine IP)
+                ip = "192.168.86.89";
             }
             return ip;
         }

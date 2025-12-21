@@ -225,14 +225,215 @@ namespace BrotherConnection
         /// <summary>
         /// Parse ATCTL file - ATC (Automatic Tool Changer) control data.
         /// Contains information about tools currently loaded in the ATC magazine.
-        /// Format: CSV-like with pot number, tool number, tool data per line
+        /// Format: M##,tool_num,?,?,color where M## = pot (##-1) and last field is color.
+        /// Tool data (diameter, length, group, life, type) should be cross-referenced with tool table (TOLNI1).
         /// </summary>
-        public Dictionary<string, string> ParseAtctl(string[] lines)
+        /// <param name="lines">ATCTL file lines</param>
+        /// <param name="toolTableData">Optional tool table data dictionary to cross-reference tool specs</param>
+        public Dictionary<string, string> ParseAtctl(string[] lines, Dictionary<string, string> toolTableData = null)
         {
             var result = new Dictionary<string, string>();
             
             if (lines == null || lines.Length == 0)
+            {
+                Console.Error.WriteLine("[DEBUG] ParseAtctl: lines is null or empty");
                 return result;
+            }
+
+            Console.Error.WriteLine($"[DEBUG] ParseAtctl: Processing {lines.Length} lines");
+            var atcTools = new List<string>();
+            int toolCount = 0;
+            int skippedLines = 0;
+
+            foreach (var line in lines)
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+                    
+                var trimmed = line.Trim();
+                // Skip comments
+                if (trimmed.StartsWith("(") || trimmed.StartsWith(";"))
+                    continue;
+
+                var parts = trimmed.Split(',');
+                int potNum = -1;
+                int toolNum = -1;
+                
+                // Format appears to be: M##,tool_num,...
+                // M## = Pot number (M10 = pot 10)
+                // Second field = Tool number
+                if (parts.Length >= 2)
+                {
+                    var potStr = parts[0].Trim();
+                    // Try parsing pot number from "M##" format
+                    // M## maps to pot (##-1), so M02 = pot 1, M11 = pot 10
+                    if (potStr.StartsWith("M"))
+                    {
+                        if (int.TryParse(potStr.Substring(1), out int mNum))
+                        {
+                            potNum = mNum - 1; // M## = pot (##-1)
+                        }
+                    }
+                    // Also try "P##" format
+                    else if (potStr.StartsWith("P"))
+                    {
+                        if (int.TryParse(potStr.Substring(1), out potNum))
+                        {
+                            // Pot number found
+                        }
+                    }
+                    // Or just a number
+                    else if (int.TryParse(potStr, out potNum))
+                    {
+                        // Pot number found
+                    }
+                    
+                    // Tool number is in second field
+                    var toolNumStr = parts[1].Trim();
+                    if (toolNumStr.StartsWith("T"))
+                    {
+                        if (int.TryParse(toolNumStr.Substring(1), out toolNum))
+                        {
+                            // Tool number found
+                        }
+                    }
+                    else if (int.TryParse(toolNumStr, out toolNum))
+                    {
+                        // Tool number found
+                    }
+                }
+                
+                // Strategy 2: Look for pot and tool anywhere in the line
+                if (potNum == -1 || toolNum == -1)
+                {
+                    // Search for patterns like "P10" or "10" for pot, "T24" or "24" for tool
+                    foreach (var part in parts)
+                    {
+                        var cleanPart = part.Trim();
+                        if (potNum == -1)
+                        {
+                            if (cleanPart.StartsWith("P") && int.TryParse(cleanPart.Substring(1), out int p))
+                            {
+                                potNum = p;
+                            }
+                            else if (int.TryParse(cleanPart, out int p2) && p2 >= 1 && p2 <= 100) // Pot numbers are typically 1-100
+                            {
+                                // Could be pot, but need to verify it's not tool number
+                                if (toolNum == -1 || p2 != toolNum)
+                                {
+                                    potNum = p2;
+                                }
+                            }
+                        }
+                        
+                        if (toolNum == -1)
+                        {
+                            if (cleanPart.StartsWith("T") && int.TryParse(cleanPart.Substring(1), out int t))
+                            {
+                                toolNum = t;
+                            }
+                            else if (int.TryParse(cleanPart, out int t2) && t2 >= 1 && t2 <= 99) // Tool numbers are typically 1-99
+                            {
+                                // Could be tool number
+                                if (potNum == -1 || t2 != potNum)
+                                {
+                                    toolNum = t2;
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // If we found both pot and tool, extract the data
+                if (potNum > 0 && toolNum > 0)
+                {
+                    // Debug: log first few successful parses, especially pot 10 -> tool 24
+                    if (toolCount < 5 || (potNum == 10 && toolNum == 24))
+                    {
+                        Console.Error.WriteLine($"[DEBUG] ParseAtctl: Parsed pot {potNum}, tool {toolNum}, line: {trimmed.Substring(0, Math.Min(100, trimmed.Length))}");
+                    }
+                    
+                            // Format: M##,tool_num,?,?,color
+                            // Last field is color
+                            var toolName = parts.Length > 2 ? parts[2].Trim().Trim('\'').Trim() : "";
+                            // Last field is color
+                            var color = parts.Length > 1 ? parts[parts.Length - 1].Trim() : "0";
+                            
+                            // Get tool data from tool table (TOLNI1) if available
+                            var length = "0";
+                            var diameter = "0";
+                            var group = "";
+                            var life = "0";
+                            var toolType = "1";
+                            
+                            if (toolTableData != null)
+                            {
+                                // Look up tool data by tool number
+                                var toolKey = $"Tool {toolNum}";
+                                if (toolTableData.ContainsKey($"{toolKey} Length"))
+                                    length = toolTableData[$"{toolKey} Length"];
+                                if (toolTableData.ContainsKey($"{toolKey} Diameter"))
+                                    diameter = toolTableData[$"{toolKey} Diameter"];
+                                if (toolTableData.ContainsKey($"{toolKey} Group"))
+                                    group = toolTableData[$"{toolKey} Group"];
+                                if (toolTableData.ContainsKey($"{toolKey} Life"))
+                                    life = toolTableData[$"{toolKey} Life"];
+                                // Tool name from tool table if not in ATCTL
+                                if (string.IsNullOrWhiteSpace(toolName) && toolTableData.ContainsKey($"{toolKey} Name"))
+                                    toolName = toolTableData[$"{toolKey} Name"];
+                            }
+
+                    // Store individual tool data
+                    result[$"ATC Pot {potNum} Tool Number"] = toolNum.ToString();
+                    result[$"ATC Pot {potNum} Tool Name"] = toolName;
+                    result[$"ATC Pot {potNum} Length"] = length;
+                    result[$"ATC Pot {potNum} Diameter"] = diameter;
+                    result[$"ATC Pot {potNum} Group"] = group;
+                    result[$"ATC Pot {potNum} Life"] = life;
+                    result[$"ATC Pot {potNum} Type"] = toolType;
+                    result[$"ATC Pot {potNum} Color"] = color;
+
+                    // Store as ATC tool entry
+                    atcTools.Add($"P{potNum}:T{toolNum}:{toolName}:LEN={length}:DIA={diameter}:GRP={group}:LIFE={life}:TYPE={toolType}:COL={color}");
+                    toolCount++;
+                }
+                else
+                {
+                    skippedLines++;
+                    if (skippedLines <= 5)
+                    {
+                        Console.Error.WriteLine($"[DEBUG] ParseAtctl: Could not find pot/tool in line: {trimmed.Substring(0, Math.Min(100, trimmed.Length))}");
+                    }
+                }
+            }
+            
+            Console.Error.WriteLine($"[DEBUG] ParseAtctl: Total lines processed: {lines.Length}, Tools found: {toolCount}, Skipped: {skippedLines}");
+
+            // Store ATC tool count and combined ATC tool list
+            result["ATC Tool count"] = toolCount.ToString();
+            if (atcTools.Count > 0)
+            {
+                result["ATC Tools"] = string.Join("|", atcTools);
+            }
+
+            return result;
+        }
+
+
+        /// <summary>
+        /// Parse TPTNC1 file - Tool Pattern file, contains ATC pot-to-tool mappings.
+        /// Format: P###,tool1,tool2,tool3... where P### is pot number and tools are tool numbers
+        /// Example: P012,1 means pot 12 has tool 1
+        /// Example: P021,1,2,6 means pot 21 has tools 1, 2, and 6
+        /// </summary>
+        public Dictionary<string, string> ParseTptnc1(string[] lines)
+        {
+            var result = new Dictionary<string, string>();
+            
+            if (lines == null || lines.Length == 0)
+            {
+                return result;
+            }
 
             var atcTools = new List<string>();
             int toolCount = 0;
@@ -247,43 +448,42 @@ namespace BrotherConnection
                 if (trimmed.StartsWith("(") || trimmed.StartsWith(";"))
                     continue;
 
-                // Try CSV format: POT,TOOL_NUM,TOOL_NAME,LENGTH,DIAMETER,GROUP,LIFE,TYPE,COLOR
+                // Format: P###,tool1,tool2,tool3...
+                // Pot number is in first column with "P" prefix
                 var parts = trimmed.Split(',');
-                if (parts.Length >= 3)
+                if (parts.Length >= 2 && parts[0].StartsWith("P"))
                 {
-                    // Pot number (slot in ATC)
-                    var potStr = parts[0].Trim();
+                    // Extract pot number from "P012" -> 12
+                    var potStr = parts[0].Substring(1); // Remove "P"
                     if (int.TryParse(potStr, out int potNum))
                     {
-                        // Tool number
-                        var toolNumStr = parts[1].Trim();
-                        if (int.TryParse(toolNumStr, out int toolNum))
+                        // First tool number is in second column
+                        if (int.TryParse(parts[1].Trim(), out int toolNum))
                         {
-                            var toolName = parts.Length > 2 ? parts[2].Trim().Trim('\'').Trim() : "";
-                            var length = parts.Length > 3 ? parts[3].Trim() : "0";
-                            var diameter = parts.Length > 4 ? parts[4].Trim() : "0";
-                            var group = parts.Length > 5 ? parts[5].Trim() : "";
-                            var life = parts.Length > 6 ? parts[6].Trim() : "0";
-                            var toolType = parts.Length > 7 ? parts[7].Trim() : "1";
-                            var color = parts.Length > 8 ? parts[8].Trim() : "0";
-
-                            // Store individual tool data
-                            result[$"ATC Pot {potNum} Tool Number"] = toolNum.ToString();
-                            result[$"ATC Pot {potNum} Tool Name"] = toolName;
-                            result[$"ATC Pot {potNum} Length"] = length;
-                            result[$"ATC Pot {potNum} Diameter"] = diameter;
-                            result[$"ATC Pot {potNum} Group"] = group;
-                            result[$"ATC Pot {potNum} Life"] = life;
-                            result[$"ATC Pot {potNum} Type"] = toolType;
-                            result[$"ATC Pot {potNum} Color"] = color;
+                            // Get tool name from tool table if available (we'll need to cross-reference)
+                            // For now, just use the tool number as the name
+                            var toolName = $"Tool {toolNum}";
+                            
+                            // Default values (we don't have length/diameter/group/life/type/color from this file)
+                            var length = "0";
+                            var diameter = "0";
+                            var group = "";
+                            var life = "0";
+                            var toolType = "1";
+                            var color = "0";
 
                             // Store as ATC tool entry
                             atcTools.Add($"P{potNum}:T{toolNum}:{toolName}:LEN={length}:DIA={diameter}:GRP={group}:LIFE={life}:TYPE={toolType}:COL={color}");
                             toolCount++;
+                            
+                            // If there are multiple tools in this pot (parts.Length > 2), we only take the first one
+                            // as the ATC typically has one tool per pot
                         }
                     }
                 }
             }
+            
+            Console.Error.WriteLine($"[DEBUG] ParseTptnc1: Total lines processed: {lines.Length}, Tools found: {toolCount}");
 
             // Store ATC tool count and combined ATC tool list
             result["ATC Tool count"] = toolCount.ToString();
@@ -349,7 +549,10 @@ namespace BrotherConnection
 
         /// <summary>
         /// Parse TOLNI1 file - tool table data (CSV format).
-        /// Format: T##,length,diameter,corner_radius,flute_length,group,spindle_speed_max,spindle_speed_min,life,tool_name,...
+        /// Format: T##,length,field2,diameter,field4,group,tool_life_limit,field7,life,tool_name,...
+        /// Example: T01,3.4494,0.0000,0.2500,0.0000,2,10000,9500,9952,'.250 3FL      ',...
+        /// Field 6 is tool life limit (max life), field 8 is current life remaining.
+        /// Field 7 is unknown and not currently mapped.
         /// </summary>
         public Dictionary<string, string> ParseTolni(string[] lines)
         {
@@ -361,6 +564,13 @@ namespace BrotherConnection
             var tools = new List<string>();
             int toolCount = 0;
 
+            // Debug: log first few lines to understand format
+            Console.Error.WriteLine($"[DEBUG] ParseTolni: Processing {lines.Length} lines");
+            for (int i = 0; i < Math.Min(3, lines.Length); i++)
+            {
+                Console.Error.WriteLine($"[DEBUG] ParseTolni: Line {i}: '{lines[i]}'");
+            }
+            
             foreach (var line in lines)
             {
                 if (string.IsNullOrWhiteSpace(line))
@@ -372,6 +582,7 @@ namespace BrotherConnection
                     continue;
 
                 // Format: T##,length,diameter,corner_radius,flute_length,group,spindle_speed_max,spindle_speed_min,life,tool_name,...
+                // OR: T##,field1,field2,field3,... (need to identify which field is diameter)
                 var parts = trimmed.Split(',');
                 if (parts.Length < 2)
                     continue;
@@ -383,9 +594,32 @@ namespace BrotherConnection
 
                 if (int.TryParse(toolNumStr.Substring(1), out int toolNum))
                 {
+                    // Debug: log T01 line to see all fields
+                    if (toolNum == 1)
+                    {
+                        Console.Error.WriteLine($"[DEBUG] ParseTolni: T01 line has {parts.Length} fields:");
+                        for (int i = 0; i < parts.Length; i++)
+                        {
+                            Console.Error.WriteLine($"[DEBUG]   Field {i}: '{parts[i]}'");
+                        }
+                    }
+                    
                     // Extract key fields
                     var toolData = new StringBuilder();
                     toolData.Append($"T{toolNum:D2},");
+                    
+                    // Format: T##,length,field2,diameter,field4,group,tool_life_limit,field7,life,tool_name,...
+                    // Example: T01,3.4494,0.0000,0.2500,0.0000,2,10000,9500,9952,'.250 3FL      ',...
+                    // Field 0: Tool number (T##)
+                    // Field 1: Length
+                    // Field 2: Unknown (often 0.0000)
+                    // Field 3: Diameter (THIS IS THE DIAMETER!)
+                    // Field 4: Unknown (often 0.0000)
+                    // Field 5: Group
+                    // Field 6: Tool life limit (maximum tool life)
+                    // Field 7: Unknown (needs verification - might be related to tool life or another parameter)
+                    // Field 8: Life (current tool life remaining)
+                    // Field 9: Tool name
                     
                     // Length (field 1)
                     if (parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1]))
@@ -395,12 +629,18 @@ namespace BrotherConnection
                         result[$"Tool {toolNum} Length"] = len;
                     }
                     
-                    // Diameter (field 2) 
-                    if (parts.Length > 2 && !string.IsNullOrWhiteSpace(parts[2]))
+                    // Diameter (field 3) - THIS IS THE CORRECT FIELD
+                    if (parts.Length > 3 && !string.IsNullOrWhiteSpace(parts[3]))
                     {
-                        var dia = parts[2].Trim();
+                        var dia = parts[3].Trim();
                         toolData.Append($"DIA={dia},");
                         result[$"Tool {toolNum} Diameter"] = dia;
+                    }
+                    else
+                    {
+                        // Default to 0 if not found
+                        toolData.Append($"DIA=0.0000,");
+                        result[$"Tool {toolNum} Diameter"] = "0.0000";
                     }
                     
                     // Group (field 5)
@@ -410,11 +650,15 @@ namespace BrotherConnection
                         result[$"Tool {toolNum} Group"] = group;
                     }
                     
-                    // Spindle speed max/min (fields 6, 7)
+                    // Tool life limit (field 6) - maximum tool life
                     if (parts.Length > 6 && !string.IsNullOrWhiteSpace(parts[6]))
-                        result[$"Tool {toolNum} Spindle Speed Max"] = parts[6].Trim();
-                    if (parts.Length > 7 && !string.IsNullOrWhiteSpace(parts[7]))
-                        result[$"Tool {toolNum} Spindle Speed Min"] = parts[7].Trim();
+                    {
+                        var lifeLimit = parts[6].Trim();
+                        result[$"Tool {toolNum} Life Limit"] = lifeLimit;
+                    }
+                    
+                    // Field 7: Unknown - not mapping until we know what it represents
+                    // (was previously mapped as "Spindle Speed Min" but that was incorrect)
                     
                     // Life (field 8)
                     if (parts.Length > 8 && !string.IsNullOrWhiteSpace(parts[8]))

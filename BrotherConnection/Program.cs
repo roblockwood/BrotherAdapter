@@ -15,7 +15,7 @@ namespace BrotherConnection
         static void Main(string[] args)
         {
             // Get CNC IP from environment for logging
-            var cncIp = Environment.GetEnvironmentVariable("CNC_IP_ADDRESS") ?? "10.0.0.25";
+            var cncIp = Environment.GetEnvironmentVariable("CNC_IP_ADDRESS") ?? "192.168.86.89";
             var cncPort = Environment.GetEnvironmentVariable("CNC_PORT") ?? "10000";
             
             // Get agent port from environment
@@ -229,8 +229,14 @@ namespace BrotherConnection
                     try
                     {
                         var tolniLines = fileLoader.LoadFile("TOLNI1");
-                        if (tolniLines != null)
+                        if (tolniLines != null && tolniLines.Length > 0)
                         {
+                            Console.Error.WriteLine($"[DEBUG] Loaded TOLNI1 ({tolniLines.Length} lines), first 5 lines:");
+                            for (int i = 0; i < Math.Min(5, tolniLines.Length); i++)
+                            {
+                                Console.Error.WriteLine($"[DEBUG]   [{i}] {tolniLines[i]}");
+                            }
+                            
                             var tolniData = fileLoader.ParseTolni(tolniLines);
                             foreach (var kvp in tolniData)
                             {
@@ -280,15 +286,50 @@ namespace BrotherConnection
                     }
                     
                     // Load ATCTL (ATC control - tools currently loaded in ATC magazine)
+                    // User confirmed ATCTL contains the pot-to-tool mapping
+                    // Cross-reference with tool table (TOLNI1) for tool specs (diameter, length, group, life, type)
                     try
                     {
                         var atctlLines = fileLoader.LoadFile("ATCTL");
-                        if (atctlLines != null)
+                        if (atctlLines != null && atctlLines.Length > 0)
                         {
-                            var atctlData = fileLoader.ParseAtctl(atctlLines);
-                            foreach (var kvp in atctlData)
+                            Console.Error.WriteLine($"[DEBUG] Loaded ATCTL ({atctlLines.Length} lines), first 10 lines:");
+                            for (int i = 0; i < Math.Min(10, atctlLines.Length); i++)
                             {
-                                DecodedResults[kvp.Key] = kvp.Value;
+                                Console.Error.WriteLine($"[DEBUG]   [{i}] {atctlLines[i]}");
+                            }
+                            
+                            // Get tool table data for cross-referencing
+                            var toolTableData = new Dictionary<string, string>();
+                            foreach (var kvp in DecodedResults)
+                            {
+                                if (kvp.Key.StartsWith("Tool ") && (kvp.Key.Contains(" Length") || kvp.Key.Contains(" Diameter") || kvp.Key.Contains(" Group") || kvp.Key.Contains(" Life") || kvp.Key.Contains(" Name")))
+                                {
+                                    toolTableData[kvp.Key] = kvp.Value;
+                                }
+                            }
+                            
+                            var atcData = fileLoader.ParseAtctl(atctlLines, toolTableData);
+                            if (atcData.ContainsKey("ATC Tools") && !string.IsNullOrWhiteSpace(atcData["ATC Tools"]))
+                            {
+                                // Validate: check for pot 10 -> tool 24
+                                if (atcData["ATC Tools"].Contains("P10:T24"))
+                                {
+                                    Console.Error.WriteLine($"[INFO] SUCCESS! ATCTL contains pot 10 -> tool 24 mapping!");
+                                }
+                                else
+                                {
+                                    Console.Error.WriteLine($"[WARNING] ATCTL parsed but doesn't contain pot 10 -> tool 24. Found: {atcData["ATC Tools"].Substring(0, Math.Min(200, atcData["ATC Tools"].Length))}");
+                                }
+                                
+                                foreach (var kvp in atcData)
+                                {
+                                    DecodedResults[kvp.Key] = kvp.Value;
+                                }
+                            }
+                            else
+                            {
+                                Console.Error.WriteLine($"[WARNING] ATCTL loaded but ParseAtctl didn't extract any ATC tools. Need to fix parser.");
                             }
                         }
                     }
