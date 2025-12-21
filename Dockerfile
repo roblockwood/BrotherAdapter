@@ -21,13 +21,17 @@ RUN nuget restore BrotherConnection.sln -NonInteractive
 # Build the application using MSBuild
 RUN msbuild BrotherConnection.sln /p:Configuration=Release /p:Platform="Any CPU" /t:Build
 
-# Runtime stage
-FROM mono:latest-slim
+# Runtime stage - use same base image but clean up build tools
+FROM mono:latest
 
 WORKDIR /app
 
-# Install curl for health checks
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+# Install curl for health checks (and remove build tools to reduce size)
+RUN apt-get update && apt-get install -y \
+    curl \
+    && apt-get remove -y --purge nuget msbuild \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copy published application
 COPY --from=build /src/BrotherConnection/bin/Release .
