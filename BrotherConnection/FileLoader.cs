@@ -355,7 +355,8 @@ namespace BrotherConnection
                     
                             // Format: M##,tool_num,?,?,color
                             // Last field is color
-                            var toolName = parts.Length > 2 ? parts[2].Trim().Trim('\'').Trim() : "";
+                            // Tool name should ALWAYS come from tool table (TOLNI1), not from ATCTL
+                            var toolName = "";
                             // Last field is color
                             var color = parts.Length > 1 ? parts[parts.Length - 1].Trim() : "0";
                             
@@ -378,8 +379,8 @@ namespace BrotherConnection
                                     group = toolTableData[$"{toolKey} Group"];
                                 if (toolTableData.ContainsKey($"{toolKey} Life"))
                                     life = toolTableData[$"{toolKey} Life"];
-                                // Tool name from tool table if not in ATCTL
-                                if (string.IsNullOrWhiteSpace(toolName) && toolTableData.ContainsKey($"{toolKey} Name"))
+                                // Tool name ALWAYS from tool table (TOLNI1 has the correct tool name)
+                                if (toolTableData.ContainsKey($"{toolKey} Name"))
                                     toolName = toolTableData[$"{toolKey} Name"];
                             }
 
