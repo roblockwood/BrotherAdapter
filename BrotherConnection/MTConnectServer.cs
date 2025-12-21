@@ -295,8 +295,24 @@ namespace BrotherConnection
                 string execution = MapExecution();
                 string mode = "AUTOMATIC"; // Default, could be mapped from Brother data
                 string program = _latestData.ContainsKey("Program name") ? _latestData["Program name"] : "";
+                
+                // Spindle speed (RPM)
                 string spindleSpeed = _latestData.ContainsKey("Spindle Speed") ? _latestData["Spindle Speed"] : "0";
-                string feedrate = _latestData.ContainsKey("Feedrate override") ? _latestData["Feedrate override"] : "100";
+                
+                // Feedrate - convert from percentage to actual feedrate if available
+                // Brother provides "Feedrate override" as percentage, and "Feedrate" as actual value
+                string feedrate = "0";
+                if (_latestData.ContainsKey("Feedrate"))
+                {
+                    feedrate = _latestData["Feedrate"];
+                }
+                else if (_latestData.ContainsKey("Feedrate override"))
+                {
+                    // Use override as fallback (this is percentage, not ideal but better than nothing)
+                    feedrate = _latestData["Feedrate override"];
+                }
+                
+                // Machine coordinate positions (in mm typically for Brother)
                 string xPos = _latestData.ContainsKey("Machine coordinate position (X-Axis)") ? _latestData["Machine coordinate position (X-Axis)"] : "0";
                 string yPos = _latestData.ContainsKey("Machine coordinate position (Y-Axis)") ? _latestData["Machine coordinate position (Y-Axis)"] : "0";
                 string zPos = _latestData.ContainsKey("Machine coordinate position (Z-Axis)") ? _latestData["Machine coordinate position (Z-Axis)"] : "0";
