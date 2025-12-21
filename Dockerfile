@@ -1,7 +1,8 @@
 # Dockerfile for BrotherAdapter MTConnect Agent
-# Based on the actual repository structure
+# Uses Windows container for .NET Framework 4.6.1
 
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+# Use Windows Server Core with .NET Framework
+FROM mcr.microsoft.com/dotnet/framework/sdk:4.8-windowsservercore-ltsc2022 AS build
 
 WORKDIR /src
 
@@ -9,37 +10,29 @@ WORKDIR /src
 COPY BrotherConnection.sln .
 COPY BrotherConnection/ ./BrotherConnection/
 
-# Restore dependencies
-RUN dotnet restore BrotherConnection.sln
+# Restore NuGet packages
+RUN nuget restore BrotherConnection.sln
 
-# Build the application
-RUN dotnet build BrotherConnection.sln -c Release -o /app/build
+# Build the application using MSBuild
+RUN msbuild BrotherConnection.sln /p:Configuration=Release /p:Platform="Any CPU" /t:Build
 
-# Publish the application
-FROM build AS publish
-RUN dotnet publish BrotherConnection/BrotherConnection.csproj -c Release -o /app/publish
+# Runtime stage - use Windows Server Core
+FROM mcr.microsoft.com/dotnet/framework/runtime:4.8-windowsservercore-ltsc2022 AS final
 
-# Runtime stage
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
 WORKDIR /app
 
-# Install curl for health checks
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
-
 # Copy published application
-COPY --from=publish /app/publish .
+COPY --from=build /src/BrotherConnection/bin/Release .
 
-# Expose MTConnect agent port (default 7878, but may vary)
+# Expose MTConnect agent port
 EXPOSE 7878
 
 # Set environment variables
 ENV ASPNETCORE_URLS=http://+:7878
-ENV ASPNETCORE_ENVIRONMENT=Production
 
-# Health check
+# Health check (Windows PowerShell)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:7878/probe || exit 1
+    CMD powershell -Command "try { $response = Invoke-WebRequest -Uri http://localhost:7878/probe -UseBasicParsing; exit $response.StatusCode -eq 200 } catch { exit 1 }"
 
 # Run the application
-ENTRYPOINT ["dotnet", "BrotherConnection.dll"]
-
+ENTRYPOINT ["BrotherConnection.exe"]
