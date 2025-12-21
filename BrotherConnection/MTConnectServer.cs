@@ -326,6 +326,7 @@ namespace BrotherConnection
         <DataItem id=""power_on_hours"" type=""PATH_FEEDRATE"" category=""SAMPLE"" />
         <DataItem id=""alarm_code"" type=""ALARM"" category=""EVENT"" />
         <DataItem id=""alarm_message"" type=""ALARM"" category=""EVENT"" />
+        <DataItem id=""alarms_table"" type=""ALARM"" category=""EVENT"" />
         <DataItem id=""counter_1_target"" type=""PART_COUNT"" category=""SAMPLE"" />
         <DataItem id=""counter_2_target"" type=""PART_COUNT"" category=""SAMPLE"" />
         <DataItem id=""counter_3_target"" type=""PART_COUNT"" category=""SAMPLE"" />
@@ -449,6 +450,7 @@ namespace BrotherConnection
             <DataItemRef dataItemId=""alarm_program"" />
             <DataItemRef dataItemId=""alarm_block"" />
             <DataItemRef dataItemId=""alarm_severity"" />
+            <DataItemRef dataItemId=""alarms_table"" />
           </DataItemRefs>
         </Controller>
         <Axes id=""axes"" name=""axes"">
@@ -623,11 +625,60 @@ namespace BrotherConnection
                 string powerOnHours = _latestData.ContainsKey("Power on time") ? _latestData["Power on time"] : "";
                 
                 // Alarm data (from ALARM file)
+                // Get first alarm for backward compatibility (alarm_code, alarm_message)
                 string alarmCode = _latestData.ContainsKey("Alarm 0 Code") ? _latestData["Alarm 0 Code"] : "";
                 string alarmMessage = _latestData.ContainsKey("Alarm 0 Message") ? _latestData["Alarm 0 Message"] : "";
                 string alarmProgram = _latestData.ContainsKey("Alarm 0 Program") ? _latestData["Alarm 0 Program"] : "";
                 string alarmBlock = _latestData.ContainsKey("Alarm 0 Block") ? _latestData["Alarm 0 Block"] : "";
                 string alarmSeverity = _latestData.ContainsKey("Alarm 0 Severity") ? _latestData["Alarm 0 Severity"] : "";
+                
+                // Build alarms table: pipe-delimited format
+                // Format: CODE:MESSAGE:PROGRAM:BLOCK:SEVERITY|CODE:MESSAGE:PROGRAM:BLOCK:SEVERITY|...
+                // Debug: check what alarm keys are in _latestData
+                var alarmKeys = new List<string>();
+                foreach (var key in _latestData.Keys)
+                {
+                    if (key.StartsWith("Alarm "))
+                    {
+                        alarmKeys.Add(key);
+                    }
+                }
+                if (alarmKeys.Count > 0)
+                {
+                    var keysToShow = alarmKeys.Count > 10 ? string.Join(", ", alarmKeys.Take(10)) : string.Join(", ", alarmKeys);
+                    Console.Error.WriteLine($"[DEBUG] MTConnectServer: Found {alarmKeys.Count} alarm keys in _latestData: {keysToShow}");
+                }
+                else
+                {
+                    Console.Error.WriteLine("[DEBUG] MTConnectServer: NO alarm keys found in _latestData!");
+                }
+                
+                var alarmsList = new List<string>();
+                int alarmIndex = 0;
+                while (_latestData.ContainsKey($"Alarm {alarmIndex} Code"))
+                {
+                    var code = _latestData[$"Alarm {alarmIndex} Code"];
+                    var message = _latestData.ContainsKey($"Alarm {alarmIndex} Message") ? _latestData[$"Alarm {alarmIndex} Message"] : "";
+                    var alarmProg = _latestData.ContainsKey($"Alarm {alarmIndex} Program") ? _latestData[$"Alarm {alarmIndex} Program"] : "";
+                    var alarmBlk = _latestData.ContainsKey($"Alarm {alarmIndex} Block") ? _latestData[$"Alarm {alarmIndex} Block"] : "";
+                    var alarmSev = _latestData.ContainsKey($"Alarm {alarmIndex} Severity") ? _latestData[$"Alarm {alarmIndex} Severity"] : "error";
+                    
+                    if (!string.IsNullOrWhiteSpace(code) && code != "0")
+                    {
+                        alarmsList.Add($"{code}:{message}:{alarmProg}:{alarmBlk}:{alarmSev}");
+                    }
+                    alarmIndex++;
+                }
+                string alarmsTable = string.Join("|", alarmsList);
+                // Debug: log alarms_table value
+                if (!string.IsNullOrEmpty(alarmsTable))
+                {
+                    Console.Error.WriteLine($"[DEBUG] MTConnectServer: alarms_table has {alarmsList.Count} alarms: {alarmsTable.Substring(0, Math.Min(200, alarmsTable.Length))}");
+                }
+                else
+                {
+                    Console.Error.WriteLine("[DEBUG] MTConnectServer: alarms_table is EMPTY");
+                }
 
                 return $@"<?xml version=""1.0"" encoding=""UTF-8""?>
 <MTConnectStreams xmlns=""urn:mtconnect.org:MTConnectStreams:1.7"" xmlns:xsi=""http://www.w3.org/2001/XMLSchema-instance"" xsi:schemaLocation=""urn:mtconnect.org:MTConnectStreams:1.7 http://www.mtconnect.org/schemas/MTConnectStreams_1.7.xsd"">
@@ -747,6 +798,7 @@ namespace BrotherConnection
           <Program dataItemId=""alarm_program"" timestamp=""{timestamp}"">{EscapeXml(alarmProgram)}</Program>
           <Program dataItemId=""alarm_block"" timestamp=""{timestamp}"">{EscapeXml(alarmBlock)}</Program>
           <Alarm dataItemId=""alarm_severity"" timestamp=""{timestamp}"">{EscapeXml(alarmSeverity)}</Alarm>
+          <Alarm dataItemId=""alarms_table"" timestamp=""{timestamp}"">{EscapeXml(alarmsTable)}</Alarm>
         </Events>
       </ComponentStream>
       <ComponentStream component=""Axes"" name=""axes"">
