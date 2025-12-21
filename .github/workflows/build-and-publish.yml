@@ -7,10 +7,18 @@ on:
       - master
     tags:
       - 'v*'
+    paths:
+      - 'BrotherConnection/**'
+      - 'Dockerfile'
+      - '.github/workflows/build-and-publish.yml'
   pull_request:
     branches:
       - main
       - master
+    paths:
+      - 'BrotherConnection/**'
+      - 'Dockerfile'
+      - '.github/workflows/build-and-publish.yml'
   workflow_dispatch:
 
 env:
