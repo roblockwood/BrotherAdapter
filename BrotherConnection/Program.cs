@@ -62,9 +62,6 @@ namespace BrotherConnection
                         Console.WriteLine($"[INFO] Connection restored to {cncIp}:{cncPort}");
                         consecutiveErrors = 0;
                     }
-                    
-                    // Update MTConnect server with latest data
-                    mtconnectServer.UpdateData(DecodedResults);
                 }
                 catch (System.Net.Sockets.SocketException ex)
                 {
