@@ -48,6 +48,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="FileLoader.cs" />
     <Compile Include="Mapping\DataMap.cs" />
     <Compile Include="Mapping\EnumValue.cs" />
     <Compile Include="Mapping\Item.cs" />

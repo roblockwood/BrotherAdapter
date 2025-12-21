@@ -36,9 +36,20 @@ namespace BrotherConnection
             var mtconnectServer = new MTConnectServer(agentPort);
             mtconnectServer.Start();
             
+            // Load data mapping for PDSP
             var prodData3Map = JsonConvert.DeserializeObject<DataMap>(File.ReadAllText("ProductionData3.json"));
+            
+            // Initialize file loader
+            var fileLoader = new FileLoader();
+            
             var consecutiveErrors = 0;
             var maxConsecutiveErrors = 5;
+            
+            // Configuration: which files to load and how often
+            // PDSP: every cycle (2 seconds) - real-time data
+            // Other files: every 5 cycles (10 seconds) - status data changes less frequently
+            int cycleCount = 0;
+            const int STATUS_FILE_INTERVAL = 5; // Load status files every 5 cycles
             
             while (true)
             {
@@ -123,28 +134,189 @@ namespace BrotherConnection
                     continue;
                 }
 
-                //*
+                // Parse PDSP data (always loaded - real-time data)
                 foreach (var line in prodData3Map.Lines)
                 {
+                    if (line.Number >= rawData.Length)
+                        continue;
+                        
                     var rawLine = rawData[line.Number].Split(',');
-                    if (rawLine[0] == line.Symbol)
+                    if (rawLine.Length == 0 || rawLine[0] != line.Symbol)
+                        continue;
+
+                    rawLine = rawLine.Skip(1).ToArray();
+                    for (int i = 1; i < line.Items.Count && i < rawLine.Length; i++)
                     {
-                        rawLine = rawLine.Skip(1).ToArray();
-                        for (int i = 1; i < line.Items.Count; i++)
+                        if (line.Items[i].Type == "Number")
                         {
-                            if (line.Items[i].Type == "Number")
+                            DecodedResults[line.Items[i].Name] = rawLine[i].Trim();
+                        }
+                        else if (line.Items[i].EnumValues != null && line.Items[i].EnumValues.Count > 0)
+                        {
+                            if (int.TryParse(rawLine[i].Trim(), out int enumIndex))
                             {
-                                DecodedResults[line.Items[i].Name] = rawLine[i].Trim();
-                            }
-                            else
-                            {
-                                DecodedResults[line.Items[i].Name] = line.Items[i].EnumValues.First(v => v.Index == Convert.ToInt32(rawLine[i])).Value;
+                                var enumValue = line.Items[i].EnumValues.FirstOrDefault(v => v.Index == enumIndex);
+                                if (enumValue != null)
+                                {
+                                    DecodedResults[line.Items[i].Name] = enumValue.Value;
+                                }
                             }
                         }
                     }
-                } //*/
+                }
                 
-                // Update MTConnect server with decoded data
+                // Load status files periodically (every 5 cycles = 10 seconds)
+                cycleCount++;
+                if (cycleCount >= STATUS_FILE_INTERVAL)
+                {
+                    cycleCount = 0;
+                    
+                    // Load MEM (program name)
+                    try
+                    {
+                        var memLines = fileLoader.LoadFile("MEM");
+                        if (memLines != null)
+                        {
+                            var memData = fileLoader.ParseMem(memLines);
+                            foreach (var kvp in memData)
+                            {
+                                DecodedResults[kvp.Key] = kvp.Value;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[WARNING] Failed to load/parse MEM: {ex.Message}");
+                    }
+                    
+                    // Load ALARM
+                    try
+                    {
+                        var alarmLines = fileLoader.LoadFile("ALARM");
+                        if (alarmLines != null)
+                        {
+                            var alarmData = fileLoader.ParseAlarm(alarmLines);
+                            foreach (var kvp in alarmData)
+                            {
+                                DecodedResults[kvp.Key] = kvp.Value;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[WARNING] Failed to load/parse ALARM: {ex.Message}");
+                    }
+                    
+                    // Load WKCNTR (workpiece counters)
+                    try
+                    {
+                        var wkcntrLines = fileLoader.LoadFile("WKCNTR");
+                        if (wkcntrLines != null)
+                        {
+                            var wkcntrData = fileLoader.ParseWkcntr(wkcntrLines);
+                            foreach (var kvp in wkcntrData)
+                            {
+                                DecodedResults[kvp.Key] = kvp.Value;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[WARNING] Failed to load/parse WKCNTR: {ex.Message}");
+                    }
+                    
+                    // Load TOLNI1 (tool table)
+                    try
+                    {
+                        var tolniLines = fileLoader.LoadFile("TOLNI1");
+                        if (tolniLines != null)
+                        {
+                            var tolniData = fileLoader.ParseTolni(tolniLines);
+                            foreach (var kvp in tolniData)
+                            {
+                                DecodedResults[kvp.Key] = kvp.Value;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[WARNING] Failed to load/parse TOLNI1: {ex.Message}");
+                    }
+                    
+                    // Load POSNI1 (work offsets)
+                    try
+                    {
+                        var posniLines = fileLoader.LoadFile("POSNI1");
+                        if (posniLines != null)
+                        {
+                            var posniData = fileLoader.ParsePosni(posniLines);
+                            foreach (var kvp in posniData)
+                            {
+                                DecodedResults[kvp.Key] = kvp.Value;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[WARNING] Failed to load/parse POSNI1: {ex.Message}");
+                    }
+                    
+                    // Load MONTR (monitor data - cycle time, cutting time, etc.)
+                    try
+                    {
+                        var montrLines = fileLoader.LoadFile("MONTR");
+                        if (montrLines != null)
+                        {
+                            var montrData = fileLoader.ParseMontr(montrLines);
+                            foreach (var kvp in montrData)
+                            {
+                                DecodedResults[kvp.Key] = kvp.Value;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[WARNING] Failed to load/parse MONTR: {ex.Message}");
+                    }
+                    
+                    // Load ATCTL (ATC control - tools currently loaded in ATC magazine)
+                    try
+                    {
+                        var atctlLines = fileLoader.LoadFile("ATCTL");
+                        if (atctlLines != null)
+                        {
+                            var atctlData = fileLoader.ParseAtctl(atctlLines);
+                            foreach (var kvp in atctlData)
+                            {
+                                DecodedResults[kvp.Key] = kvp.Value;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[WARNING] Failed to load/parse ATCTL: {ex.Message}");
+                    }
+                    
+                    // Load PANEL (panel data - may contain ATC status)
+                    try
+                    {
+                        var panelLines = fileLoader.LoadFile("PANEL");
+                        if (panelLines != null)
+                        {
+                            var panelData = fileLoader.ParsePanel(panelLines);
+                            foreach (var kvp in panelData)
+                            {
+                                DecodedResults[kvp.Key] = kvp.Value;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[WARNING] Failed to load/parse PANEL: {ex.Message}");
+                    }
+                }
+                
+                // Update MTConnect server with all decoded data
                 mtconnectServer.UpdateData(DecodedResults);
 
                 /*
@@ -235,3 +407,4 @@ namespace BrotherConnection
         }
     }
 }
+
