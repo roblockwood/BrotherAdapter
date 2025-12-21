@@ -1,7 +1,7 @@
 # Dockerfile for BrotherAdapter MTConnect Agent (Linux/Mono version)
 # Uses Mono to run .NET Framework 4.6.1 on Linux
 
-FROM mono:6.12 AS build
+FROM mono:latest AS build
 
 WORKDIR /src
 
@@ -22,7 +22,7 @@ RUN nuget restore BrotherConnection.sln -NonInteractive
 RUN msbuild BrotherConnection.sln /p:Configuration=Release /p:Platform="Any CPU" /t:Build
 
 # Runtime stage
-FROM mono:6.12-slim
+FROM mono:latest-slim
 
 WORKDIR /app
 
