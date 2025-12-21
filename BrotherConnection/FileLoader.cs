@@ -99,7 +99,8 @@ namespace BrotherConnection
 
         /// <summary>
         /// Parse ALARM file - contains current alarm status.
-        /// Format: CSV-like with alarm code, message, program, block, severity
+        /// Format: [prefix][severity][code];
+        /// Example: 052039; = IO2039 (05=IO prefix, 90=error severity, 2039=code)
         /// </summary>
         public Dictionary<string, string> ParseAlarm(string[] lines)
         {
@@ -111,6 +112,30 @@ namespace BrotherConnection
             var alarms = new List<string>();
             int alarmIndex = 0;
 
+            // Debug: log first few lines to understand format
+            Console.Error.WriteLine($"[DEBUG] ParseAlarm: Processing {lines.Length} lines");
+            for (int i = 0; i < Math.Min(10, lines.Length); i++)
+            {
+                Console.Error.WriteLine($"[DEBUG] ParseAlarm: Line {i}: '{lines[i]}'");
+            }
+            
+            // Map category codes to alarm prefixes (from Brother documentation)
+            // Format: [category(2)][alarm_number(4)] = 6 digits total
+            var categoryMap = new Dictionary<string, string>
+            {
+                { "01", "EX" },
+                { "02", "EC" },
+                { "03", "SV" },
+                { "04", "NC" },
+                { "05", "IO" },
+                { "06", "SP" },
+                { "07", "SM" },
+                { "08", "SL" },
+                { "09", "CM" },
+                { "10", "ES" },
+                { "11", "FC" },
+            };
+            
             foreach (var line in lines)
             {
                 if (string.IsNullOrWhiteSpace(line))
@@ -118,34 +143,109 @@ namespace BrotherConnection
                     
                 var trimmed = line.Trim();
                 // Skip comments
-                if (trimmed.StartsWith("(") || trimmed.StartsWith(";"))
+                if (trimmed.StartsWith("(") || (trimmed.StartsWith(";") && !trimmed.Contains("0")))
                     continue;
 
-                // Try CSV format: CODE,MESSAGE,PROGRAM,BLOCK,SEVERITY
-                var parts = trimmed.Split(',');
-                if (parts.Length >= 2)
+                // Remove semicolon if present
+                if (trimmed.EndsWith(";"))
                 {
-                    var code = parts[0].Trim();
-                    var message = parts.Length > 1 ? parts[1].Trim() : "";
+                    trimmed = trimmed.Substring(0, trimmed.Length - 1);
+                }
+                
+                // Format: LINE_ID,ALARM_CODE1,ALARM_CODE2,...
+                // Example: E01,050518    ,052039    ,052047    ,907516    ,077586
+                // Where E01 is a line identifier, and the rest are alarm codes (with trailing spaces)
+                var parts = trimmed.Split(',');
+                if (parts.Length < 2)
+                    continue;
+                
+                // Skip first part (line identifier like E01, L01)
+                // Process each alarm code
+                for (int i = 1; i < parts.Length; i++)
+                {
+                    var alarmStr = parts[i].Trim();
+                    if (string.IsNullOrWhiteSpace(alarmStr) || alarmStr == "0")
+                        continue;
                     
-                    // Only process if we have a valid alarm code
-                    if (!string.IsNullOrWhiteSpace(code) && code != "0" && code != "")
+                    // Format: [category(2)][alarm_number(4)] = 6 digits total
+                    // Example: 050518 = 05 (IO) + 0518 (alarm number) -> IO0518
+                    // Example: 052039 = 05 (IO) + 2039 (alarm number) -> IO2039
+                    // Example: 077586 = 07 (SM) + 7586 (alarm number) -> SM7586
+                    // Example: 097541 = 09 (CM) + 7541 (alarm number) -> CM7541
+                    // Some codes may have extra digits (e.g., 9075110018 -> should be 7511, but 90 is not a valid category)
+                    
+                    string alarmCode = "";
+                    string severity = "error"; // Default severity
+                    
+                    if (alarmStr.Length >= 4 && alarmStr.All(char.IsDigit))
                     {
-                        var program = parts.Length > 2 ? parts[2].Trim() : "";
-                        var block = parts.Length > 3 ? parts[3].Trim() : "";
-                        var severity = parts.Length > 4 ? parts[4].Trim() : "error";
+                        // Standard format: 6 digits = [category(2)][alarm_number(4)]
+                        if (alarmStr.Length >= 6)
+                        {
+                            string categoryCode = alarmStr.Substring(0, 2);
+                            if (categoryMap.ContainsKey(categoryCode))
+                            {
+                                string category = categoryMap[categoryCode];
+                                // Alarm number is next 4 digits
+                                string alarmNumber = alarmStr.Substring(2, 4);
+                                alarmCode = category + alarmNumber;
+                            }
+                            else
+                            {
+                                // Invalid category code - use just the 4-digit alarm number (skip category)
+                                // This handles cases where the category code is not recognized
+                                alarmCode = alarmStr.Substring(2, 4);
+                            }
+                        }
+                        // Shorter codes (4 digits) - no category, just alarm number
+                        else if (alarmStr.Length == 4)
+                        {
+                            alarmCode = alarmStr;
+                        }
+                        // Handle malformed codes with extra digits
+                        else if (alarmStr.Length > 6)
+                        {
+                            // Try to find a valid 6-digit code within
+                            // Example: 9075110018 -> might be 751100 or 7511
+                            // Look for valid category in first 2 digits of any 6-digit window
+                            bool found = false;
+                            for (int start = 0; start <= alarmStr.Length - 6 && !found; start++)
+                            {
+                                string categoryCode = alarmStr.Substring(start, 2);
+                                if (categoryMap.ContainsKey(categoryCode))
+                                {
+                                    string category = categoryMap[categoryCode];
+                                    string alarmNumber = alarmStr.Substring(start + 2, 4);
+                                    alarmCode = category + alarmNumber;
+                                    found = true;
+                                }
+                            }
+                            if (!found)
+                            {
+                                // No valid category found, extract 4-digit alarm number
+                                // Remove trailing zeros and take last 4 digits
+                                string trimmedAlarm = alarmStr.TrimEnd('0');
+                                if (trimmedAlarm.Length >= 4)
+                                {
+                                    alarmCode = trimmedAlarm.Substring(Math.Max(0, trimmedAlarm.Length - 4));
+                                }
+                                else
+                                {
+                                    alarmCode = alarmStr.Substring(0, 4);
+                                }
+                            }
+                        }
                         
-                        // Store individual alarm
-                        result[$"Alarm {alarmIndex} Code"] = code;
-                        result[$"Alarm {alarmIndex} Message"] = message;
-                        if (!string.IsNullOrWhiteSpace(program))
-                            result[$"Alarm {alarmIndex} Program"] = program;
-                        if (!string.IsNullOrWhiteSpace(block))
-                            result[$"Alarm {alarmIndex} Block"] = block;
-                        result[$"Alarm {alarmIndex} Severity"] = severity;
-                        
-                        alarms.Add($"{code}:{message}");
-                        alarmIndex++;
+                        if (!string.IsNullOrWhiteSpace(alarmCode) && alarmCode != "0")
+                        {
+                            // Store individual alarm
+                            result[$"Alarm {alarmIndex} Code"] = alarmCode;
+                            result[$"Alarm {alarmIndex} Message"] = ""; // Message not in ALARM file format
+                            result[$"Alarm {alarmIndex} Severity"] = severity;
+                            
+                            alarms.Add($"{alarmCode}:{severity}");
+                            alarmIndex++;
+                        }
                     }
                 }
             }
@@ -224,9 +324,17 @@ namespace BrotherConnection
 
         /// <summary>
         /// Parse ATCTL file - ATC (Automatic Tool Changer) control data.
-        /// Contains information about tools currently loaded in the ATC magazine.
-        /// Format: M##,tool_num,?,?,color where M## = pot (##-1) and last field is color.
-        /// Tool data (diameter, length, group, life, type) should be cross-referenced with tool table (TOLNI1).
+        /// Format (from Brother documentation):
+        /// - M01 = Spindle (current tool)
+        /// - M02-M51 = Pots 1-50
+        /// Each entry: M##,tool_num,conversation_nc,group_main_tool,type,color
+        /// Fields:
+        ///   1. Tool No. (0: Not set, 1-99: Tool No, 255: Cap setting)
+        ///   2. Spindle (Conversation/NC) - 0: Conversation, 1:NC
+        ///   3. Spindle (Group No. (NC) / Main tool No. (Conversation)) - Group No.: 0 (Not set), 1-30, Main tool No.: 0 (Not set), 1-99
+        ///   4. Spindle (Type) - 1: Standard, 2: Large diameter, 3: Medium diameter
+        ///   5. Spindle (Graph color) - 0: No color, 1: Blue, 2: Red, 3: Purple, 4: Green, 5: Light blue, 6: Yellow, 7: White
+        /// Tool data (diameter, length, name, life) should be cross-referenced with tool table (TOLNI1).
         /// </summary>
         /// <param name="lines">ATCTL file lines</param>
         /// <param name="toolTableData">Optional tool table data dictionary to cross-reference tool specs</param>
@@ -256,91 +364,87 @@ namespace BrotherConnection
                     continue;
 
                 var parts = trimmed.Split(',');
+                if (parts.Length < 2)
+                    continue;
+                
+                // Format: M##,tool_num,conversation_nc,group_main_tool,type,color
+                // M01 = Spindle (current tool) - skip for now
+                // M02-M51 = Pots 1-50 (M02 = pot 1, M03 = pot 2, etc., so pot = M## - 1)
                 int potNum = -1;
                 int toolNum = -1;
+                int conversationNc = 0;
+                int groupMainTool = 0;
+                int type = 1;
+                int color = 0;
                 
-                // Format appears to be: M##,tool_num,...
-                // M## = Pot number (M10 = pot 10)
-                // Second field = Tool number
-                if (parts.Length >= 2)
+                // Extract pot number from M## prefix
+                var potStr = parts[0].Trim();
+                if (potStr.StartsWith("M"))
                 {
-                    var potStr = parts[0].Trim();
-                    // Try parsing pot number from "M##" format
-                    // M## maps to pot (##-1), so M02 = pot 1, M11 = pot 10
-                    if (potStr.StartsWith("M"))
+                    if (int.TryParse(potStr.Substring(1), out int mNum))
                     {
-                        if (int.TryParse(potStr.Substring(1), out int mNum))
+                        if (mNum == 1)
                         {
-                            potNum = mNum - 1; // M## = pot (##-1)
+                            // M01 = Spindle (current tool), skip for now
+                            continue;
                         }
-                    }
-                    // Also try "P##" format
-                    else if (potStr.StartsWith("P"))
-                    {
-                        if (int.TryParse(potStr.Substring(1), out potNum))
+                        else if (mNum >= 2 && mNum <= 51)
                         {
-                            // Pot number found
+                            // M02-M51 = Pots 1-50
+                            potNum = mNum - 1; // M02 = pot 1, M11 = pot 10
                         }
-                    }
-                    // Or just a number
-                    else if (int.TryParse(potStr, out potNum))
-                    {
-                        // Pot number found
-                    }
-                    
-                    // Tool number is in second field
-                    var toolNumStr = parts[1].Trim();
-                    if (toolNumStr.StartsWith("T"))
-                    {
-                        if (int.TryParse(toolNumStr.Substring(1), out toolNum))
-                        {
-                            // Tool number found
-                        }
-                    }
-                    else if (int.TryParse(toolNumStr, out toolNum))
-                    {
-                        // Tool number found
                     }
                 }
                 
-                // Strategy 2: Look for pot and tool anywhere in the line
-                if (potNum == -1 || toolNum == -1)
+                // Field 1: Tool No. (0: Not set, 1-99: Tool No, 255: Cap setting)
+                if (parts.Length > 1)
                 {
-                    // Search for patterns like "P10" or "10" for pot, "T24" or "24" for tool
-                    foreach (var part in parts)
+                    var toolNumStr = parts[1].Trim();
+                    if (int.TryParse(toolNumStr, out toolNum))
                     {
-                        var cleanPart = part.Trim();
-                        if (potNum == -1)
+                        // 0 = Not set, 255 = Cap setting - skip these
+                        if (toolNum == 0 || toolNum == 255)
                         {
-                            if (cleanPart.StartsWith("P") && int.TryParse(cleanPart.Substring(1), out int p))
-                            {
-                                potNum = p;
-                            }
-                            else if (int.TryParse(cleanPart, out int p2) && p2 >= 1 && p2 <= 100) // Pot numbers are typically 1-100
-                            {
-                                // Could be pot, but need to verify it's not tool number
-                                if (toolNum == -1 || p2 != toolNum)
-                                {
-                                    potNum = p2;
-                                }
-                            }
+                            continue;
                         }
-                        
-                        if (toolNum == -1)
-                        {
-                            if (cleanPart.StartsWith("T") && int.TryParse(cleanPart.Substring(1), out int t))
-                            {
-                                toolNum = t;
-                            }
-                            else if (int.TryParse(cleanPart, out int t2) && t2 >= 1 && t2 <= 99) // Tool numbers are typically 1-99
-                            {
-                                // Could be tool number
-                                if (potNum == -1 || t2 != potNum)
-                                {
-                                    toolNum = t2;
-                                }
-                            }
-                        }
+                    }
+                }
+                
+                // Field 2: Spindle (Conversation/NC) - 0: Conversation, 1:NC
+                if (parts.Length > 2)
+                {
+                    var convNcStr = parts[2].Trim();
+                    int.TryParse(convNcStr, out conversationNc);
+                }
+                
+                // Field 3: Spindle (Group No. (NC) / Main tool No. (Conversation))
+                // Group No.: 0 (Not set), 1-30
+                // Main tool No.: 0 (Not set), 1-99
+                if (parts.Length > 3)
+                {
+                    var groupStr = parts[3].Trim();
+                    int.TryParse(groupStr, out groupMainTool);
+                }
+                
+                // Field 4: Spindle (Type) - 1: Standard, 2: Large diameter, 3: Medium diameter
+                if (parts.Length > 4)
+                {
+                    var typeStr = parts[4].Trim();
+                    if (int.TryParse(typeStr, out int parsedType))
+                    {
+                        type = parsedType;
+                    }
+                }
+                
+                // Field 5: Spindle (Graph color) - 0: No color, 1: Blue, 2: Red, 3: Purple, 4: Green, 5: Light blue, 6: Yellow, 7: White
+                if (parts.Length > 5)
+                {
+                    var colorStr = parts[5].Trim();
+                    // Remove CR+LF if present
+                    colorStr = colorStr.Replace("\r", "").Replace("\n", "").Trim();
+                    if (int.TryParse(colorStr, out int parsedColor))
+                    {
+                        color = parsedColor;
                     }
                 }
                 
@@ -350,39 +454,35 @@ namespace BrotherConnection
                     // Debug: log first few successful parses, especially pot 10 -> tool 24
                     if (toolCount < 5 || (potNum == 10 && toolNum == 24))
                     {
-                        Console.Error.WriteLine($"[DEBUG] ParseAtctl: Parsed pot {potNum}, tool {toolNum}, line: {trimmed.Substring(0, Math.Min(100, trimmed.Length))}");
+                        Console.Error.WriteLine($"[DEBUG] ParseAtctl: Parsed pot {potNum}, tool {toolNum}, type={type}, color={color}, line: {trimmed.Substring(0, Math.Min(100, trimmed.Length))}");
                     }
                     
-                            // Format: M##,tool_num,?,?,color
-                            // Last field is color
-                            // Tool name should ALWAYS come from tool table (TOLNI1), not from ATCTL
-                            var toolName = "";
-                            // Last field is color
-                            var color = parts.Length > 1 ? parts[parts.Length - 1].Trim() : "0";
-                            
-                            // Get tool data from tool table (TOLNI1) if available
-                            var length = "0";
-                            var diameter = "0";
-                            var group = "";
-                            var life = "0";
-                            var toolType = "1";
-                            
-                            if (toolTableData != null)
-                            {
-                                // Look up tool data by tool number
-                                var toolKey = $"Tool {toolNum}";
-                                if (toolTableData.ContainsKey($"{toolKey} Length"))
-                                    length = toolTableData[$"{toolKey} Length"];
-                                if (toolTableData.ContainsKey($"{toolKey} Diameter"))
-                                    diameter = toolTableData[$"{toolKey} Diameter"];
-                                if (toolTableData.ContainsKey($"{toolKey} Group"))
-                                    group = toolTableData[$"{toolKey} Group"];
-                                if (toolTableData.ContainsKey($"{toolKey} Life"))
-                                    life = toolTableData[$"{toolKey} Life"];
-                                // Tool name ALWAYS from tool table (TOLNI1 has the correct tool name)
-                                if (toolTableData.ContainsKey($"{toolKey} Name"))
-                                    toolName = toolTableData[$"{toolKey} Name"];
-                            }
+                    // Tool name should ALWAYS come from tool table (TOLNI1), not from ATCTL
+                    var toolName = "";
+                    // Get tool data from tool table (TOLNI1) if available
+                    var length = "0";
+                    var diameter = "0";
+                    var group = groupMainTool > 0 ? groupMainTool.ToString() : "";
+                    var life = "0";
+                    var toolType = type.ToString(); // Use type from ATCTL (1: Standard, 2: Large diameter, 3: Medium diameter)
+                    
+                    if (toolTableData != null)
+                    {
+                        // Look up tool data by tool number
+                        var toolKey = $"Tool {toolNum}";
+                        if (toolTableData.ContainsKey($"{toolKey} Length"))
+                            length = toolTableData[$"{toolKey} Length"];
+                        if (toolTableData.ContainsKey($"{toolKey} Diameter"))
+                            diameter = toolTableData[$"{toolKey} Diameter"];
+                        // Use group from ATCTL if available, otherwise from tool table
+                        if (string.IsNullOrEmpty(group) && toolTableData.ContainsKey($"{toolKey} Group"))
+                            group = toolTableData[$"{toolKey} Group"];
+                        if (toolTableData.ContainsKey($"{toolKey} Life"))
+                            life = toolTableData[$"{toolKey} Life"];
+                        // Tool name ALWAYS from tool table (TOLNI1 has the correct tool name)
+                        if (toolTableData.ContainsKey($"{toolKey} Name"))
+                            toolName = toolTableData[$"{toolKey} Name"];
+                    }
 
                     // Store individual tool data
                     result[$"ATC Pot {potNum} Tool Number"] = toolNum.ToString();
@@ -392,7 +492,7 @@ namespace BrotherConnection
                     result[$"ATC Pot {potNum} Group"] = group;
                     result[$"ATC Pot {potNum} Life"] = life;
                     result[$"ATC Pot {potNum} Type"] = toolType;
-                    result[$"ATC Pot {potNum} Color"] = color;
+                    result[$"ATC Pot {potNum} Color"] = color.ToString();
 
                     // Store as ATC tool entry
                     atcTools.Add($"P{potNum}:T{toolNum}:{toolName}:LEN={length}:DIA={diameter}:GRP={group}:LIFE={life}:TYPE={toolType}:COL={color}");
@@ -549,11 +649,33 @@ namespace BrotherConnection
         }
 
         /// <summary>
-        /// Parse TOLNI1 file - tool table data (CSV format).
-        /// Format: T##,length,field2,diameter,field4,group,tool_life_limit,field7,life,tool_name,...
-        /// Example: T01,3.4494,0.0000,0.2500,0.0000,2,10000,9500,9952,'.250 3FL      ',...
-        /// Field 6 is tool life limit (max life), field 8 is current life remaining.
-        /// Field 7 is unknown and not currently mapped.
+        /// Parse TOLNI1 file - tool table data (comma-delimited format).
+        /// Format (from Brother documentation):
+        /// T01-T99: Tool entries
+        ///   Field 0: Tool number (T##)
+        ///   Field 1: Tool length offset (8 chars)
+        ///   Field 2: T length wear offset (7 chars)
+        ///   Field 3: Cutter compensation (8 chars) - THIS IS THE DIAMETER
+        ///   Field 4: Cutter wear offset (7 chars)
+        ///   Field 5: Tool life unit (1 char, 1-4)
+        ///   Field 6: Initial tool life / End of tool life (6 chars, 0-999999)
+        ///   Field 7: Tool life warning (6 chars, 0-999999)
+        ///   Field 8: Tool life (6 chars, 0-999999) - CURRENT TOOL LIFE
+        ///   Field 9: Tool name (16 chars, wrapped in single quotes)
+        ///   Field 10: Rotation feed (4 chars)
+        ///   Field 11: S command value (5 chars, 1-99999)
+        ///   Field 12: F command value (9 chars)
+        ///   Field 13: Maximum speed (5 chars, 0-999999, 0 = rotation not possible)
+        ///   Field 14: Tool wash (1 char, 0: Possible, 1: Not possible)
+        ///   Field 15: CTS (1 char, 0: Possible, 1: Not possible)
+        ///   Field 16: Tool type number (8 chars, 0-99999999, 0 = Not set)
+        ///   Field 17: Tool position offset (X) (8 chars)
+        ///   Field 18: Tool position wear offset (X) (7 chars)
+        ///   Field 19: Tool position offset (Y) (8 chars)
+        ///   Field 20: Tool position wear offset (Y) (7 chars)
+        ///   Field 21: Virtual teeth direction (1 char)
+        /// Y01-Y99: Group data (tool numbers in groups)
+        /// M01-M99: Min/max values
         /// </summary>
         public Dictionary<string, string> ParseTolni(string[] lines)
         {
@@ -564,6 +686,9 @@ namespace BrotherConnection
 
             var tools = new List<string>();
             int toolCount = 0;
+            
+            // Dictionary to store group assignments (from Y01-Y99 entries)
+            var groupAssignments = new Dictionary<int, int>(); // tool number -> group number
 
             // Debug: log first few lines to understand format
             Console.Error.WriteLine($"[DEBUG] ParseTolni: Processing {lines.Length} lines");
@@ -572,6 +697,7 @@ namespace BrotherConnection
                 Console.Error.WriteLine($"[DEBUG] ParseTolni: Line {i}: '{lines[i]}'");
             }
             
+            // First pass: Parse Y01-Y99 entries to get group assignments
             foreach (var line in lines)
             {
                 if (string.IsNullOrWhiteSpace(line))
@@ -582,16 +708,65 @@ namespace BrotherConnection
                 if (trimmed.StartsWith("(") || trimmed.StartsWith(";"))
                     continue;
 
-                // Format: T##,length,diameter,corner_radius,flute_length,group,spindle_speed_max,spindle_speed_min,life,tool_name,...
-                // OR: T##,field1,field2,field3,... (need to identify which field is diameter)
                 var parts = trimmed.Split(',');
                 if (parts.Length < 2)
                     continue;
 
-                // First field is tool number (T##)
-                var toolNumStr = parts[0].Trim().ToUpper();
-                if (!toolNumStr.StartsWith("T"))
+                var firstField = parts[0].Trim().ToUpper();
+                
+                // Handle Y01-Y99 entries (group data)
+                // Format: Y##,tool1,tool2,...,tool30 (up to 30 tools per group)
+                if (firstField.StartsWith("Y"))
+                {
+                    if (int.TryParse(firstField.Substring(1), out int groupNum))
+                    {
+                        // Parse tool numbers in this group (fields 1-30)
+                        for (int i = 1; i < parts.Length && i <= 30; i++)
+                        {
+                            var toolNumStr = parts[i].Trim();
+                            if (int.TryParse(toolNumStr, out int toolNum) && toolNum >= 1 && toolNum <= 99)
+                            {
+                                groupAssignments[toolNum] = groupNum;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Second pass: Parse T01-T99 entries (tool data)
+            foreach (var line in lines)
+            {
+                if (string.IsNullOrWhiteSpace(line))
                     continue;
+                    
+                var trimmed = line.Trim();
+                // Skip comments
+                if (trimmed.StartsWith("(") || trimmed.StartsWith(";"))
+                    continue;
+
+                var parts = trimmed.Split(',');
+                if (parts.Length < 2)
+                    continue;
+
+                var firstField = parts[0].Trim().ToUpper();
+                
+                // Handle M01-M99 entries (min/max values) - skip for now
+                if (firstField.StartsWith("M"))
+                {
+                    continue;
+                }
+                
+                // Handle Y01-Y99 entries - already processed in first pass
+                if (firstField.StartsWith("Y"))
+                {
+                    continue;
+                }
+
+                // First field is tool number (T##)
+                if (!firstField.StartsWith("T"))
+                    continue;
+                    
+                var toolNumStr = firstField;
 
                 if (int.TryParse(toolNumStr.Substring(1), out int toolNum))
                 {
@@ -609,20 +784,27 @@ namespace BrotherConnection
                     var toolData = new StringBuilder();
                     toolData.Append($"T{toolNum:D2},");
                     
-                    // Format: T##,length,field2,diameter,field4,group,tool_life_limit,field7,life,tool_name,...
-                    // Example: T01,3.4494,0.0000,0.2500,0.0000,2,10000,9500,9952,'.250 3FL      ',...
+                    // Format per documentation:
                     // Field 0: Tool number (T##)
-                    // Field 1: Length
-                    // Field 2: Unknown (often 0.0000)
-                    // Field 3: Diameter (THIS IS THE DIAMETER!)
-                    // Field 4: Unknown (often 0.0000)
-                    // Field 5: Group
-                    // Field 6: Tool life limit (maximum tool life)
-                    // Field 7: Unknown (needs verification - might be related to tool life or another parameter)
-                    // Field 8: Life (current tool life remaining)
-                    // Field 9: Tool name
+                    // Field 1: Tool length offset
+                    // Field 2: T length wear offset
+                    // Field 3: Cutter compensation (DIAMETER)
+                    // Field 4: Cutter wear offset
+                    // Field 5: Tool life unit (1-4)
+                    // Field 6: Initial tool life / End of tool life
+                    // Field 7: Tool life warning
+                    // Field 8: Tool life (CURRENT TOOL LIFE)
+                    // Field 9: Tool name (wrapped in single quotes)
+                    // Field 10: Rotation feed
+                    // Field 11: S command value
+                    // Field 12: F command value
+                    // Field 13: Maximum speed
+                    // Field 14: Tool wash
+                    // Field 15: CTS
+                    // Field 16: Tool type number
+                    // Field 17+: Tool position offsets, etc.
                     
-                    // Length (field 1)
+                    // Tool length offset (field 1)
                     if (parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1]))
                     {
                         var len = parts[1].Trim();
@@ -630,7 +812,7 @@ namespace BrotherConnection
                         result[$"Tool {toolNum} Length"] = len;
                     }
                     
-                    // Diameter (field 3) - THIS IS THE CORRECT FIELD
+                    // Cutter compensation = Diameter (field 3)
                     if (parts.Length > 3 && !string.IsNullOrWhiteSpace(parts[3]))
                     {
                         var dia = parts[3].Trim();
@@ -644,31 +826,24 @@ namespace BrotherConnection
                         result[$"Tool {toolNum} Diameter"] = "0.0000";
                     }
                     
-                    // Group (field 5)
-                    if (parts.Length > 5 && !string.IsNullOrWhiteSpace(parts[5]))
-                    {
-                        var group = parts[5].Trim();
-                        result[$"Tool {toolNum} Group"] = group;
-                    }
-                    
-                    // Tool life limit (field 6) - maximum tool life
+                    // Tool life unit (field 5) - not currently used but documented
+                    // Initial tool life / End of tool life (field 6) - this is the tool life limit
                     if (parts.Length > 6 && !string.IsNullOrWhiteSpace(parts[6]))
                     {
                         var lifeLimit = parts[6].Trim();
                         result[$"Tool {toolNum} Life Limit"] = lifeLimit;
                     }
                     
-                    // Field 7: Unknown - not mapping until we know what it represents
-                    // (was previously mapped as "Spindle Speed Min" but that was incorrect)
+                    // Tool life warning (field 7) - not currently used but documented
                     
-                    // Life (field 8)
+                    // Tool life (field 8) - CURRENT TOOL LIFE
                     if (parts.Length > 8 && !string.IsNullOrWhiteSpace(parts[8]))
                     {
                         var life = parts[8].Trim();
                         result[$"Tool {toolNum} Life"] = life;
                     }
                     
-                    // Tool name (field 9, typically)
+                    // Tool name (field 9, wrapped in single quotes)
                     if (parts.Length > 9 && !string.IsNullOrWhiteSpace(parts[9]))
                     {
                         var toolName = parts[9].Trim().Trim('\'').Trim();
@@ -677,6 +852,20 @@ namespace BrotherConnection
                             toolData.Append($"NAME={toolName},");
                             result[$"Tool {toolNum} Name"] = toolName;
                         }
+                    }
+                    
+                    // Tool type number (field 16)
+                    if (parts.Length > 16 && !string.IsNullOrWhiteSpace(parts[16]))
+                    {
+                        var toolType = parts[16].Trim();
+                        result[$"Tool {toolNum} Type"] = toolType;
+                    }
+                    
+                    // Group assignment (from Y01-Y99 entries parsed above)
+                    if (groupAssignments.ContainsKey(toolNum))
+                    {
+                        var group = groupAssignments[toolNum].ToString();
+                        result[$"Tool {toolNum} Group"] = group;
                     }
                     
                     // Store as tool data
