@@ -30,6 +30,7 @@ namespace BrotherConnection
             while (true)
             {
                 var DecodedResults = new Dictionary<String, String>();
+                String[] rawData = null;
 
                 try
                 {
@@ -38,7 +39,7 @@ namespace BrotherConnection
                     req.Command = "LOD";
                     req.Arguments = prodData3Map.FileName;
 
-                    var rawData = req.Send().Split(new String[] { "\r\n" },StringSplitOptions.None);
+                    rawData = req.Send().Split(new String[] { "\r\n" },StringSplitOptions.None);
 
                     Console.Write(req.Send());
                     
@@ -69,9 +70,11 @@ namespace BrotherConnection
                     {
                         Console.Error.WriteLine($"[ERROR] Host unreachable - check network connectivity and IP address {cncIp}");
                     }
-                    else if (ex.SocketErrorCode == System.Net.Sockets.SocketError.NoRouteToHost)
+                    // Note: NoRouteToHost doesn't exist in .NET Framework 4.6.1/Mono
+                    // Using NetworkUnreachable as alternative
+                    else if (ex.SocketErrorCode == System.Net.Sockets.SocketError.NetworkUnreachable)
                     {
-                        Console.Error.WriteLine($"[ERROR] No route to host - check network routing and IP address {cncIp}");
+                        Console.Error.WriteLine($"[ERROR] Network unreachable - check network routing and IP address {cncIp}");
                     }
                     
                     Console.Error.WriteLine($"[ERROR] Retrying in 2 seconds... (Error count: {consecutiveErrors}/{maxConsecutiveErrors})");
@@ -80,6 +83,10 @@ namespace BrotherConnection
                     {
                         Console.Error.WriteLine($"[ERROR] Maximum consecutive errors reached. Continuing to retry...");
                     }
+                    
+                    // Skip data processing on error
+                    Thread.Sleep(2000);
+                    continue;
                 }
                 catch (Exception ex)
                 {
@@ -90,6 +97,17 @@ namespace BrotherConnection
                     Console.Error.WriteLine($"[ERROR] Message: {ex.Message}");
                     Console.Error.WriteLine($"[ERROR] Stack trace: {ex.StackTrace}");
                     Console.Error.WriteLine($"[ERROR] Retrying in 2 seconds... (Error count: {consecutiveErrors})");
+                    
+                    // Skip data processing on error
+                    Thread.Sleep(2000);
+                    continue;
+                }
+
+                // Only process data if we successfully got rawData
+                if (rawData == null)
+                {
+                    Thread.Sleep(2000);
+                    continue;
                 }
 
                 //*
