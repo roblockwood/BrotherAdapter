@@ -8,7 +8,7 @@ namespace BrotherConnection
     /// <summary>
     /// Helper class to load and parse different file types from Brother CNC via LOD command.
     /// </summary>
-    public class FileLoader
+    internal class FileLoader
     {
         private Request _request;
 
