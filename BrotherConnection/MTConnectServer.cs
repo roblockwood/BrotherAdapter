@@ -83,7 +83,13 @@ namespace BrotherConnection
         {
             lock (_dataLock)
             {
-                _latestData = new Dictionary<string, string>(data);
+                // Merge data instead of replacing, so that infrequently updated data
+                // (like Tool table, ATC Tools, work offsets) doesn't get cleared
+                // when UpdateData is called with only PDSP data
+                foreach (var kvp in data)
+                {
+                    _latestData[kvp.Key] = kvp.Value;
+                }
             }
         }
 
