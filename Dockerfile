@@ -5,6 +5,11 @@ FROM mono:latest AS build
 
 WORKDIR /src
 
+# Fix Debian Buster EOL - use archive repositories
+RUN sed -i 's|http://deb.debian.org/debian|http://archive.debian.org/debian|g' /etc/apt/sources.list && \
+    sed -i 's|http://security.debian.org/debian-security|http://archive.debian.org/debian-security|g' /etc/apt/sources.list && \
+    sed -i '/stretch-updates/d' /etc/apt/sources.list || true
+
 # Install build tools
 RUN apt-get update && apt-get install -y \
     nuget \
@@ -26,10 +31,15 @@ FROM mono:latest
 
 WORKDIR /app
 
+# Fix Debian Buster EOL - use archive repositories
+RUN sed -i 's|http://deb.debian.org/debian|http://archive.debian.org/debian|g' /etc/apt/sources.list && \
+    sed -i 's|http://security.debian.org/debian-security|http://archive.debian.org/debian-security|g' /etc/apt/sources.list && \
+    sed -i '/stretch-updates/d' /etc/apt/sources.list || true
+
 # Install curl for health checks (and remove build tools to reduce size)
 RUN apt-get update && apt-get install -y \
     curl \
-    && apt-get remove -y --purge nuget msbuild \
+    && apt-get remove -y --purge nuget msbuild 2>/dev/null || true \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
