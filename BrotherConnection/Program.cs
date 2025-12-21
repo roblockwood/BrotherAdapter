@@ -145,15 +145,15 @@ namespace BrotherConnection
                         continue;
 
                     rawLine = rawLine.Skip(1).ToArray();
-                    for (int i = 1; i < line.Items.Count && i < rawLine.Length; i++)
+                    for (int i = 1; i < line.Items.Count && (i - 1) < rawLine.Length; i++)
                     {
                         if (line.Items[i].Type == "Number")
                         {
-                            DecodedResults[line.Items[i].Name] = rawLine[i].Trim();
+                            DecodedResults[line.Items[i].Name] = rawLine[i - 1].Trim();
                         }
                         else if (line.Items[i].EnumValues != null && line.Items[i].EnumValues.Count > 0)
                         {
-                            if (int.TryParse(rawLine[i].Trim(), out int enumIndex))
+                            if (int.TryParse(rawLine[i - 1].Trim(), out int enumIndex))
                             {
                                 var enumValue = line.Items[i].EnumValues.FirstOrDefault(v => v.Index == enumIndex);
                                 if (enumValue != null)
