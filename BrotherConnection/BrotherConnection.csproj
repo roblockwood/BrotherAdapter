@@ -52,6 +52,7 @@
     <Compile Include="Mapping\EnumValue.cs" />
     <Compile Include="Mapping\Item.cs" />
     <Compile Include="Mapping\Line.cs" />
+    <Compile Include="MTConnectServer.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Request.cs" />

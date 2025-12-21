@@ -18,10 +18,23 @@ namespace BrotherConnection
             var cncIp = Environment.GetEnvironmentVariable("CNC_IP_ADDRESS") ?? "10.0.0.25";
             var cncPort = Environment.GetEnvironmentVariable("CNC_PORT") ?? "10000";
             
+            // Get agent port from environment
+            var agentPortStr = Environment.GetEnvironmentVariable("AGENT_PORT") ?? "7878";
+            int agentPort = 7878;
+            if (!int.TryParse(agentPortStr, out agentPort))
+            {
+                agentPort = 7878;
+            }
+            
             Console.WriteLine($"[INFO] Starting MTConnect Agent for Brother CNC");
             Console.WriteLine($"[INFO] Target CNC: {cncIp}:{cncPort}");
+            Console.WriteLine($"[INFO] Agent HTTP server port: {agentPort}");
             Console.WriteLine($"[INFO] Agent will attempt to connect every 2 seconds...");
             Console.WriteLine();
+            
+            // Start MTConnect HTTP server
+            var mtconnectServer = new MTConnectServer(agentPort);
+            mtconnectServer.Start();
             
             var prodData3Map = JsonConvert.DeserializeObject<DataMap>(File.ReadAllText("ProductionData3.json"));
             var consecutiveErrors = 0;
@@ -49,6 +62,9 @@ namespace BrotherConnection
                         Console.WriteLine($"[INFO] Connection restored to {cncIp}:{cncPort}");
                         consecutiveErrors = 0;
                     }
+                    
+                    // Update MTConnect server with latest data
+                    mtconnectServer.UpdateData(DecodedResults);
                 }
                 catch (System.Net.Sockets.SocketException ex)
                 {
