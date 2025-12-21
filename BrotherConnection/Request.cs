@@ -13,9 +13,35 @@ namespace BrotherConnection
     {
         public String Command { get; set; }
         public String Arguments { get; set; }
+        
+        // Read CNC IP and port from environment variables
+        private static string GetCncIp()
+        {
+            var ip = Environment.GetEnvironmentVariable("CNC_IP_ADDRESS");
+            if (string.IsNullOrEmpty(ip))
+            {
+                // Fallback to default if not set
+                ip = "10.0.0.25";
+            }
+            return ip;
+        }
+        
+        private static int GetCncPort()
+        {
+            var portStr = Environment.GetEnvironmentVariable("CNC_PORT");
+            if (string.IsNullOrEmpty(portStr) || !int.TryParse(portStr, out int port))
+            {
+                // Default Brother CNC port
+                port = 10000;
+            }
+            return port;
+        }
 
         public String Send()
         {
+            var cncIp = GetCncIp();
+            var cncPort = GetCncPort();
+            
             using (var client = new TcpClient())
             {
                 var connected = false;
@@ -24,7 +50,7 @@ namespace BrotherConnection
                 {
                     try
                     {
-                        client.Connect("10.0.0.25", 10000);
+                        client.Connect(cncIp, cncPort);
                         client.NoDelay = true;
                         connected = true;
                     }
