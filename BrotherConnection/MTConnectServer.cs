@@ -241,11 +241,10 @@ namespace BrotherConnection
       <Components>
         <Controller id=""controller"" name=""controller"">
           <DataItemRefs>
-            <DataItemRef dataItemId=""avail"" />
-            <DataItemRef dataItemId=""execution"" />
-            <DataItemRef dataItemId=""mode"" />
-            <DataItemRef dataItemId=""program"" />
-            <DataItemRef dataItemId=""alarm"" />
+          <DataItemRef dataItemId=""avail"" />
+          <DataItemRef dataItemId=""execution"" />
+          <DataItemRef dataItemId=""mode"" />
+          <DataItemRef dataItemId=""program"" />
           </DataItemRefs>
         </Controller>
         <Axes id=""axes"" name=""axes"">
@@ -316,7 +315,6 @@ namespace BrotherConnection
                 string xPos = _latestData.ContainsKey("Machine coordinate position (X-Axis)") ? _latestData["Machine coordinate position (X-Axis)"] : "0";
                 string yPos = _latestData.ContainsKey("Machine coordinate position (Y-Axis)") ? _latestData["Machine coordinate position (Y-Axis)"] : "0";
                 string zPos = _latestData.ContainsKey("Machine coordinate position (Z-Axis)") ? _latestData["Machine coordinate position (Z-Axis)"] : "0";
-                string alarm = MapAlarm();
 
                 return $@"<?xml version=""1.0"" encoding=""UTF-8""?>
 <MTConnectStreams xmlns=""urn:mtconnect.org:MTConnectStreams:1.7"" xmlns:xsi=""http://www.w3.org/2001/XMLSchema-instance"" xsi:schemaLocation=""urn:mtconnect.org:MTConnectStreams:1.7 http://www.mtconnect.org/schemas/MTConnectStreams_1.7.xsd"">
@@ -329,7 +327,6 @@ namespace BrotherConnection
           <Execution dataItemId=""execution"" timestamp=""{timestamp}"">{execution}</Execution>
           <ControllerMode dataItemId=""mode"" timestamp=""{timestamp}"">{mode}</ControllerMode>
           <Program dataItemId=""program"" timestamp=""{timestamp}"">{EscapeXml(program)}</Program>
-          {alarm}
         </Events>
       </ComponentStream>
       <ComponentStream component=""Axes"" name=""axes"">
@@ -379,43 +376,38 @@ namespace BrotherConnection
 
         /// <summary>
         /// Map Brother execution state to MTConnect execution.
+        /// 
+        /// NOTE: The PDSP data file does not contain explicit execution state.
+        /// Execution state is typically available from the HTTP /running_log endpoint
+        /// which provides status like "Running", "Stopped", etc. Since we're only
+        /// using the PDSP protocol data, we cannot accurately determine execution state.
         /// </summary>
         private string MapExecution()
         {
             lock (_dataLock)
             {
-                // Try to infer execution state from Brother data
-                if (_latestData.ContainsKey("Spindle Speed"))
-                {
-                    if (int.TryParse(_latestData["Spindle Speed"], out int speed) && speed > 0)
-                    {
-                        return "ACTIVE";
-                    }
-                }
-                
-                // Default to READY if we have data but no clear indication
-                return _latestData.Count > 0 ? "READY" : "UNAVAILABLE";
+                // PDSP data does not include execution state
+                // We cannot infer this from spindle speed alone (spindle can be on in manual mode, etc.)
+                // Return UNAVAILABLE to indicate we don't have this data
+                return "UNAVAILABLE";
             }
         }
 
         /// <summary>
         /// Map Brother alarms to MTConnect alarm format.
+        /// 
+        /// NOTE: The PDSP data file does not contain alarm information.
+        /// Alarms are typically available from the HTTP /alarm_log endpoint.
+        /// Door interlock is a safety status, not an alarm condition.
         /// </summary>
         private string MapAlarm()
         {
             lock (_dataLock)
             {
-                // Check for alarm indicators in Brother data
-                // This is a simplified mapping - would need to check actual alarm data
-                if (_latestData.ContainsKey("Door interlock"))
-                {
-                    var doorStatus = _latestData["Door interlock"];
-                    if (doorStatus == "Enabled" || doorStatus.Contains("Alarm"))
-                    {
-                        var timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ");
-                        return $"<Alarm dataItemId=\"alarm\" timestamp=\"{timestamp}\" sequence=\"1\" type=\"SYSTEM\" nativeCode=\"DOOR\" severity=\"WARNING\">Door interlock active</Alarm>";
-                    }
-                }
+                // PDSP data does not include alarm information
+                // Door interlock is a safety status (Enabled/Disabled), not an alarm
+                // To get actual alarms, we would need to query the /alarm_log HTTP endpoint
+                // For now, return empty (no alarms reported)
                 return "";
             }
         }
