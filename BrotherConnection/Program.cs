@@ -14,19 +14,83 @@ namespace BrotherConnection
     {
         static void Main(string[] args)
         {
+            // Get CNC IP from environment for logging
+            var cncIp = Environment.GetEnvironmentVariable("CNC_IP_ADDRESS") ?? "10.0.0.25";
+            var cncPort = Environment.GetEnvironmentVariable("CNC_PORT") ?? "10000";
+            
+            Console.WriteLine($"[INFO] Starting MTConnect Agent for Brother CNC");
+            Console.WriteLine($"[INFO] Target CNC: {cncIp}:{cncPort}");
+            Console.WriteLine($"[INFO] Agent will attempt to connect every 2 seconds...");
+            Console.WriteLine();
+            
             var prodData3Map = JsonConvert.DeserializeObject<DataMap>(File.ReadAllText("ProductionData3.json"));
+            var consecutiveErrors = 0;
+            var maxConsecutiveErrors = 5;
+            
             while (true)
             {
                 var DecodedResults = new Dictionary<String, String>();
 
-                Console.Clear();
-                var req = new Request();
-                req.Command = "LOD";
-                req.Arguments = prodData3Map.FileName;
+                try
+                {
+                    Console.Clear();
+                    var req = new Request();
+                    req.Command = "LOD";
+                    req.Arguments = prodData3Map.FileName;
 
-                var rawData = req.Send().Split(new String[] { "\r\n" },StringSplitOptions.None);
+                    var rawData = req.Send().Split(new String[] { "\r\n" },StringSplitOptions.None);
 
-                Console.Write(req.Send());
+                    Console.Write(req.Send());
+                    
+                    // Reset error counter on successful connection
+                    if (consecutiveErrors > 0)
+                    {
+                        Console.WriteLine($"[INFO] Connection restored to {cncIp}:{cncPort}");
+                        consecutiveErrors = 0;
+                    }
+                }
+                catch (System.Net.Sockets.SocketException ex)
+                {
+                    consecutiveErrors++;
+                    Console.Error.WriteLine();
+                    Console.Error.WriteLine($"[ERROR] Cannot connect to CNC machine at {cncIp}:{cncPort}");
+                    Console.Error.WriteLine($"[ERROR] Socket error: {ex.SocketErrorCode} (Error code: {ex.ErrorCode})");
+                    Console.Error.WriteLine($"[ERROR] Message: {ex.Message}");
+                    
+                    if (ex.SocketErrorCode == System.Net.Sockets.SocketError.TimedOut)
+                    {
+                        Console.Error.WriteLine($"[ERROR] Connection timeout - machine may be unreachable or firewall blocking");
+                    }
+                    else if (ex.SocketErrorCode == System.Net.Sockets.SocketError.ConnectionRefused)
+                    {
+                        Console.Error.WriteLine($"[ERROR] Connection refused - check if CNC is powered on and port {cncPort} is open");
+                    }
+                    else if (ex.SocketErrorCode == System.Net.Sockets.SocketError.HostUnreachable)
+                    {
+                        Console.Error.WriteLine($"[ERROR] Host unreachable - check network connectivity and IP address {cncIp}");
+                    }
+                    else if (ex.SocketErrorCode == System.Net.Sockets.SocketError.NoRouteToHost)
+                    {
+                        Console.Error.WriteLine($"[ERROR] No route to host - check network routing and IP address {cncIp}");
+                    }
+                    
+                    Console.Error.WriteLine($"[ERROR] Retrying in 2 seconds... (Error count: {consecutiveErrors}/{maxConsecutiveErrors})");
+                    
+                    if (consecutiveErrors >= maxConsecutiveErrors)
+                    {
+                        Console.Error.WriteLine($"[ERROR] Maximum consecutive errors reached. Continuing to retry...");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    consecutiveErrors++;
+                    Console.Error.WriteLine();
+                    Console.Error.WriteLine($"[ERROR] Unexpected error communicating with CNC at {cncIp}:{cncPort}");
+                    Console.Error.WriteLine($"[ERROR] Exception type: {ex.GetType().Name}");
+                    Console.Error.WriteLine($"[ERROR] Message: {ex.Message}");
+                    Console.Error.WriteLine($"[ERROR] Stack trace: {ex.StackTrace}");
+                    Console.Error.WriteLine($"[ERROR] Retrying in 2 seconds... (Error count: {consecutiveErrors})");
+                }
 
                 //*
                 foreach (var line in prodData3Map.Lines)

@@ -54,12 +54,18 @@ namespace BrotherConnection
                         client.NoDelay = true;
                         connected = true;
                     }
-                    catch (SocketException)
+                    catch (SocketException ex)
                     {
                         attempts++;
                         if (attempts >= 10)
                         {
+                            Console.Error.WriteLine($"[ERROR] Failed to connect to CNC at {cncIp}:{cncPort} after {attempts} attempts. Error: {ex.Message}");
+                            Console.Error.WriteLine($"[ERROR] Socket error code: {ex.SocketErrorCode}, Error code: {ex.ErrorCode}");
                             throw;
+                        }
+                        if (attempts == 1)
+                        {
+                            Console.Error.WriteLine($"[WARNING] Connection attempt {attempts} failed for {cncIp}:{cncPort}, retrying...");
                         }
                         Thread.Sleep(20);
                     }
