@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 
 namespace BrotherConnection
 {
-    class Request
+    public class Request
     {
         public String Command { get; set; }
         public String Arguments { get; set; }

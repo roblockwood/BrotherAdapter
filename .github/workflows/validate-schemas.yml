@@ -1,0 +1,99 @@
+name: Validate MTConnect Schemas
+
+on:
+  push:
+    paths:
+      - 'BrotherConnection/MTConnectServer.cs'
+      - 'BrotherConnection/XmlValidator.cs'
+      - 'schemas/**'
+      - '.github/workflows/validate-schemas.yml'
+  pull_request:
+    paths:
+      - 'BrotherConnection/MTConnectServer.cs'
+      - 'BrotherConnection/XmlValidator.cs'
+      - 'schemas/**'
+      - '.github/workflows/validate-schemas.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-schemas:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Mono
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mono-complete ca-certificates-mono
+          
+      - name: Install NuGet
+        run: |
+          curl -L https://dist.nuget.org/win-x86-commandline/latest/nuget.exe -o nuget.exe
+          chmod +x nuget.exe
+          sudo mv nuget.exe /usr/local/bin/
+
+      - name: Setup MSBuild
+        id: msbuild_setup
+        run: |
+          # Find MSBuild.dll and its directory
+          MSBUILD_DLL=$(find /usr/lib/mono -name "MSBuild.dll" 2>/dev/null | head -1)
+          if [ -z "$MSBUILD_DLL" ]; then
+            echo "MSBuild.dll not found, attempting to locate..."
+            MSBUILD_DLL="/usr/lib/mono/msbuild/15.0/bin/MSBuild.dll"
+          fi
+          MSBUILD_DIR=$(dirname "$MSBUILD_DLL")
+          
+          # Export MSBuild info for later use
+          echo "MSBUILD_DIR=$MSBUILD_DIR" >> $GITHUB_ENV
+          echo "MSBUILD_DLL=$MSBUILD_DLL" >> $GITHUB_ENV
+          echo "MSBuild directory: $MSBUILD_DIR"
+          echo "MSBuild DLL: $MSBUILD_DLL"
+
+      - name: Restore NuGet packages
+        run: |
+          # Restore packages directly from packages.config (doesn't require MSBuild)
+          # This avoids MSBuild auto-detection issues
+          cd BrotherConnection && \
+          mono /usr/local/bin/nuget.exe install packages.config -OutputDirectory ../packages -NonInteractive
+
+      - name: Setup MSBuild wrapper for build
+        run: |
+          # Create wrapper script now that NuGet restore is done
+          echo "#!/bin/bash" | sudo tee /usr/local/bin/msbuild
+          echo "mono \"$MSBUILD_DLL\" \"\$@\"" | sudo tee -a /usr/local/bin/msbuild
+          sudo chmod +x /usr/local/bin/msbuild
+
+      - name: Build project
+        working-directory: BrotherConnection
+        run: msbuild ../BrotherConnection.sln /p:Configuration=Release /p:Platform="Any CPU" /t:Build /nologo /verbosity:minimal
+
+      - name: Verify schema files exist
+        run: |
+          if [ ! -f "schemas/MTConnectDevices_2.5.xsd" ]; then
+            echo "ERROR: MTConnectDevices_2.5.xsd not found"
+            exit 1
+          fi
+          if [ ! -f "schemas/MTConnectStreams_2.5.xsd" ]; then
+            echo "ERROR: MTConnectStreams_2.5.xsd not found"
+            exit 1
+          fi
+          echo "Schema files verified"
+
+      - name: Run schema validation
+        working-directory: BrotherConnection
+        run: |
+          echo "Running MTConnect 2.5 schema validation..."
+          mono bin/Release/BrotherConnection.exe --validate-schemas
+        continue-on-error: false
+
+      - name: Validation summary
+        if: success()
+        run: |
+          echo "✅ All MTConnect 2.5 schema validations passed!"
+

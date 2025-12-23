@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,6 +15,13 @@ namespace BrotherConnection
     {
         static void Main(string[] args)
         {
+            // Check for validation mode
+            if (args.Length > 0 && args[0] == "--validate-schemas")
+            {
+                RunSchemaValidation();
+                return;
+            }
+            
             // Get CNC IP from environment for logging
             var cncIp = Environment.GetEnvironmentVariable("CNC_IP_ADDRESS") ?? "192.168.86.89";
             var cncPort = Environment.GetEnvironmentVariable("CNC_PORT") ?? "10000";
@@ -29,18 +37,76 @@ namespace BrotherConnection
             Console.WriteLine($"[INFO] Starting MTConnect Agent for Brother CNC");
             Console.WriteLine($"[INFO] Target CNC: {cncIp}:{cncPort}");
             Console.WriteLine($"[INFO] Agent HTTP server port: {agentPort}");
+            Console.WriteLine();
+            
+            // Detect control version BEFORE any parsing
+            ControlVersion detectedVersion = ControlVersion.Unknown;
+            try
+            {
+                var versionDetector = new ControlVersionDetector();
+                detectedVersion = versionDetector.DetectVersion();
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ERROR] Failed to detect control version: {ex.Message}");
+                Console.Error.WriteLine($"[WARNING] Defaulting to C00 (this may cause parsing errors)");
+                detectedVersion = ControlVersion.C00;
+            }
+            
+            // Detect unit system AFTER version detection (needs version to know which MSRRS file to load)
+            UnitSystem detectedUnitSystem = UnitSystem.Unknown;
+            try
+            {
+                var unitDetector = new UnitSystemDetector();
+                detectedUnitSystem = unitDetector.DetectUnitSystem(detectedVersion);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ERROR] Failed to detect unit system: {ex.Message}");
+                Console.Error.WriteLine($"[WARNING] Defaulting to Metric (this may cause parsing errors)");
+                detectedUnitSystem = UnitSystem.Metric;
+            }
+            
+            Console.WriteLine();
             Console.WriteLine($"[INFO] Agent will attempt to connect every 2 seconds...");
             Console.WriteLine();
             
             // Start MTConnect HTTP server
-            var mtconnectServer = new MTConnectServer(agentPort);
+            var mtconnectServer = new MTConnectServer(agentPort, detectedUnitSystem);
             mtconnectServer.Start();
             
-            // Load data mapping for PDSP
-            var prodData3Map = JsonConvert.DeserializeObject<DataMap>(File.ReadAllText("ProductionData3.json"));
+            // Load data mapping for PDSP - version-specific if available
+            DataMap prodData3Map = null;
+            string mappingFileName = "ProductionData3.json";
+            if (detectedVersion == ControlVersion.D00)
+            {
+                // Try D00-specific mapping first (could also be unit-specific: ProductionData3_D00_Metric.json, etc.)
+                string d00MappingFile = "ProductionData3_D00.json";
+                if (File.Exists(d00MappingFile))
+                {
+                    mappingFileName = d00MappingFile;
+                    Console.WriteLine($"[INFO] Using D00-specific mapping file: {d00MappingFile}");
+                }
+                else
+                {
+                    Console.WriteLine($"[WARNING] D00 mapping file not found, using default: ProductionData3.json");
+                }
+            }
+            else
+            {
+                // For C00, use default or C00-specific if available
+                string c00MappingFile = "ProductionData3_C00.json";
+                if (File.Exists(c00MappingFile))
+                {
+                    mappingFileName = c00MappingFile;
+                    Console.WriteLine($"[INFO] Using C00-specific mapping file: {c00MappingFile}");
+                }
+            }
             
-            // Initialize file loader
-            var fileLoader = new FileLoader();
+            prodData3Map = JsonConvert.DeserializeObject<DataMap>(File.ReadAllText(mappingFileName));
+            
+            // Initialize file loader with detected version and unit system
+            var fileLoader = new FileLoader(detectedVersion, detectedUnitSystem);
             
             var consecutiveErrors = 0;
             var maxConsecutiveErrors = 5;
@@ -249,14 +315,14 @@ namespace BrotherConnection
                         Console.Error.WriteLine($"[WARNING] Failed to load/parse TOLNI1: {ex.Message}");
                     }
                     
-                    // Load POSNI1 (work offsets)
+                    // Load POSN file (work offsets) - uses POSNI for Inch or POSNM for Metric
                     try
                     {
-                        var posniLines = fileLoader.LoadFile("POSNI1");
-                        if (posniLines != null)
+                        var posnLines = fileLoader.LoadPosnFile(1); // Data bank 1 (POSNI1 or POSNM1)
+                        if (posnLines != null)
                         {
-                            var posniData = fileLoader.ParsePosni(posniLines);
-                            foreach (var kvp in posniData)
+                            var posnData = fileLoader.ParsePosni(posnLines);
+                            foreach (var kvp in posnData)
                             {
                                 DecodedResults[kvp.Key] = kvp.Value;
                             }
@@ -264,7 +330,7 @@ namespace BrotherConnection
                     }
                     catch (Exception ex)
                     {
-                        Console.Error.WriteLine($"[WARNING] Failed to load/parse POSNI1: {ex.Message}");
+                        Console.Error.WriteLine($"[WARNING] Failed to load/parse POSN file: {ex.Message}");
                     }
                     
                     // Load MONTR (monitor data - cycle time, cutting time, etc.)
@@ -444,6 +510,138 @@ namespace BrotherConnection
                 //throw new NotImplementedException();
 
                 Thread.Sleep(2000);
+            }
+        }
+
+        /// <summary>
+        /// Runs schema validation and exits with appropriate exit code.
+        /// </summary>
+        private static void RunSchemaValidation()
+        {
+            Console.WriteLine("========================================");
+            Console.WriteLine("MTConnect 2.5 Schema Validation");
+            Console.WriteLine("========================================");
+            Console.WriteLine();
+
+            var validator = new XmlValidator("schemas");
+            var server = new MTConnectServer(7878);
+            
+            int errorCount = 0;
+            bool allPassed = true;
+
+            // Validate Probe XML
+            Console.WriteLine("[1/2] Validating Probe XML (MTConnectDevices_2.5.xsd)...");
+            try
+            {
+                var probeMethod = typeof(MTConnectServer).GetMethod("GenerateProbeXml",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                
+                if (probeMethod == null)
+                {
+                    Console.WriteLine("[ERROR] Could not find GenerateProbeXml method");
+                    Environment.Exit(1);
+                    return;
+                }
+
+                var probeXml = probeMethod.Invoke(server, null) as string;
+                
+                if (string.IsNullOrEmpty(probeXml))
+                {
+                    Console.WriteLine("[ERROR] GenerateProbeXml returned null or empty");
+                    Environment.Exit(1);
+                    return;
+                }
+
+                var errors = validator.ValidateDevicesXml(probeXml);
+                if (errors.Count > 0)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("Validation Errors:");
+                    foreach (var error in errors)
+                    {
+                        Console.WriteLine($"  {error}");
+                        errorCount++;
+                    }
+                    Console.WriteLine();
+                    allPassed = false;
+                }
+                else
+                {
+                    Console.WriteLine("[PASS] Probe XML is valid");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERROR] Exception during probe validation: {ex.Message}");
+                Console.WriteLine($"        Stack trace: {ex.StackTrace}");
+                errorCount++;
+                allPassed = false;
+            }
+
+            Console.WriteLine();
+
+            // Validate Current XML
+            Console.WriteLine("[2/2] Validating Current XML (MTConnectStreams_2.5.xsd)...");
+            try
+            {
+                var currentMethod = typeof(MTConnectServer).GetMethod("GenerateCurrentXml",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                
+                if (currentMethod == null)
+                {
+                    Console.WriteLine("[ERROR] Could not find GenerateCurrentXml method");
+                    Environment.Exit(1);
+                    return;
+                }
+
+                var currentXml = currentMethod.Invoke(server, null) as string;
+                
+                if (string.IsNullOrEmpty(currentXml))
+                {
+                    Console.WriteLine("[ERROR] GenerateCurrentXml returned null or empty");
+                    Environment.Exit(1);
+                    return;
+                }
+
+                var errors = validator.ValidateStreamsXml(currentXml);
+                if (errors.Count > 0)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("Validation Errors:");
+                    foreach (var error in errors)
+                    {
+                        Console.WriteLine($"  {error}");
+                        errorCount++;
+                    }
+                    Console.WriteLine();
+                    allPassed = false;
+                }
+                else
+                {
+                    Console.WriteLine("[PASS] Current XML is valid");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ERROR] Exception during current validation: {ex.Message}");
+                Console.WriteLine($"        Stack trace: {ex.StackTrace}");
+                errorCount++;
+                allPassed = false;
+            }
+
+            Console.WriteLine();
+            Console.WriteLine("========================================");
+            if (allPassed)
+            {
+                Console.WriteLine("✅ All schema validations PASSED");
+                Console.WriteLine("========================================");
+                Environment.Exit(0);
+            }
+            else
+            {
+                Console.WriteLine($"❌ Schema validation FAILED ({errorCount} error(s))");
+                Console.WriteLine("========================================");
+                Environment.Exit(1);
             }
         }
     }
