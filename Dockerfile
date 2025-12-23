@@ -22,6 +22,12 @@ RUN apt-get update && apt-get install -y \
 RUN curl -L https://dist.nuget.org/win-x86-commandline/latest/nuget.exe -o /usr/local/bin/nuget.exe && \
     chmod +x /usr/local/bin/nuget.exe
 
+# Setup MSBuild wrapper script (MSBuild.dll location may vary by Mono version)
+RUN MSBUILD_DLL=$(find /usr/lib/mono -name "MSBuild.dll" 2>/dev/null | head -1); \
+    if [ -z "$MSBUILD_DLL" ]; then MSBUILD_DLL="/usr/lib/mono/msbuild/15.0/bin/MSBuild.dll"; fi; \
+    printf '#!/bin/bash\nmono "%s" "$@"\n' "$MSBUILD_DLL" > /usr/local/bin/msbuild && \
+    chmod +x /usr/local/bin/msbuild
+
 # Copy solution and project files
 COPY BrotherConnection.sln .
 COPY BrotherConnection/ ./BrotherConnection/

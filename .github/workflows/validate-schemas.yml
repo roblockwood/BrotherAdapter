@@ -38,6 +38,21 @@ jobs:
           chmod +x nuget.exe
           sudo mv nuget.exe /usr/local/bin/
 
+      - name: Setup MSBuild
+        run: |
+          # Find MSBuild.dll
+          MSBUILD_DLL=$(find /usr/lib/mono -name "MSBuild.dll" 2>/dev/null | head -1)
+          if [ -z "$MSBUILD_DLL" ]; then
+            echo "MSBuild.dll not found, attempting to locate..."
+            MSBUILD_DLL="/usr/lib/mono/msbuild/15.0/bin/MSBuild.dll"
+          fi
+          
+          # Create a wrapper script for msbuild
+          echo "#!/bin/bash" | sudo tee /usr/local/bin/msbuild
+          echo "mono \"$MSBUILD_DLL\" \"\$@\"" | sudo tee -a /usr/local/bin/msbuild
+          sudo chmod +x /usr/local/bin/msbuild
+          echo "MSBuild wrapper created pointing to: $MSBUILD_DLL"
+
       - name: Restore NuGet packages
         working-directory: BrotherConnection
         run: mono /usr/local/bin/nuget.exe restore ../BrotherConnection.sln -NonInteractive
