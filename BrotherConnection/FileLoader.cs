@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
+using BrotherConnection.Schema;
 
 namespace BrotherConnection
 {
@@ -11,9 +13,13 @@ namespace BrotherConnection
     internal class FileLoader
     {
         private Request _request;
+        private ControlVersion _controlVersion;
+        private UnitSystem _unitSystem;
 
-        public FileLoader(Request request = null)
+        public FileLoader(ControlVersion controlVersion = ControlVersion.C00, UnitSystem unitSystem = UnitSystem.Metric, Request request = null)
         {
+            _controlVersion = controlVersion;
+            _unitSystem = unitSystem;
             if (request != null)
             {
                 _request = request;
@@ -64,6 +70,30 @@ namespace BrotherConnection
         }
 
         /// <summary>
+        /// Load POSN file (workpiece coordinate zero) based on unit system.
+        /// POSNI = Inch, POSNM = Metric
+        /// </summary>
+        /// <param name="dataBankNumber">Data bank number (0-9, where 0 represents 10)</param>
+        /// <returns>File contents as string array, or null if load fails</returns>
+        public string[] LoadPosnFile(int dataBankNumber = 1)
+        {
+            // Determine filename based on unit system
+            string fileName;
+            if (_unitSystem == UnitSystem.Inch)
+            {
+                fileName = $"POSNI{dataBankNumber}";
+                Console.Error.WriteLine($"[DEBUG] Loading POSN file for Inch unit system: {fileName}");
+            }
+            else
+            {
+                fileName = $"POSNM{dataBankNumber}";
+                Console.Error.WriteLine($"[DEBUG] Loading POSN file for Metric unit system: {fileName}");
+            }
+            
+            return LoadFile(fileName);
+        }
+
+        /// <summary>
         /// Parse MEM file - simple format, just contains program name (O####).
         /// </summary>
         public Dictionary<string, string> ParseMem(string[] lines)
@@ -72,6 +102,25 @@ namespace BrotherConnection
             
             if (lines == null || lines.Length == 0)
                 return result;
+
+            // Version and unit-specific parsing (currently C00 and D00 use same format for MEM)
+            if (_controlVersion == ControlVersion.D00)
+            {
+                Console.Error.WriteLine($"[DEBUG] Using D00 schema for MEM parsing");
+            }
+            else
+            {
+                Console.Error.WriteLine($"[DEBUG] Using C00 schema for MEM parsing");
+            }
+            
+            if (_unitSystem == UnitSystem.Inch)
+            {
+                Console.Error.WriteLine($"[DEBUG] Using Inch unit system for MEM parsing");
+            }
+            else
+            {
+                Console.Error.WriteLine($"[DEBUG] Using Metric unit system for MEM parsing");
+            }
 
             // MEM file typically contains just the program name like "O2045" or "O2045.NC"
             foreach (var line in lines)
@@ -109,6 +158,25 @@ namespace BrotherConnection
             if (lines == null || lines.Length == 0)
                 return result;
 
+            // Version and unit-specific parsing
+            if (_controlVersion == ControlVersion.D00)
+            {
+                Console.Error.WriteLine($"[DEBUG] Using D00 schema for ALARM parsing");
+            }
+            else
+            {
+                Console.Error.WriteLine($"[DEBUG] Using C00 schema for ALARM parsing");
+            }
+            
+            if (_unitSystem == UnitSystem.Inch)
+            {
+                Console.Error.WriteLine($"[DEBUG] Using Inch unit system for ALARM parsing");
+            }
+            else
+            {
+                Console.Error.WriteLine($"[DEBUG] Using Metric unit system for ALARM parsing");
+            }
+
             var alarms = new List<string>();
             int alarmIndex = 0;
 
@@ -121,6 +189,7 @@ namespace BrotherConnection
             
             // Map category codes to alarm prefixes (from Brother documentation)
             // Format: [category(2)][alarm_number(4)] = 6 digits total
+            // Note: D00 may have different category mappings or digit counts
             var categoryMap = new Dictionary<string, string>
             {
                 { "01", "EX" },
@@ -272,6 +341,25 @@ namespace BrotherConnection
             if (lines == null || lines.Length == 0)
                 return result;
 
+            // Version and unit-specific parsing
+            if (_controlVersion == ControlVersion.D00)
+            {
+                Console.Error.WriteLine($"[DEBUG] Using D00 schema for WKCNTR parsing");
+            }
+            else
+            {
+                Console.Error.WriteLine($"[DEBUG] Using C00 schema for WKCNTR parsing");
+            }
+            
+            if (_unitSystem == UnitSystem.Inch)
+            {
+                Console.Error.WriteLine($"[DEBUG] Using Inch unit system for WKCNTR parsing");
+            }
+            else
+            {
+                Console.Error.WriteLine($"[DEBUG] Using Metric unit system for WKCNTR parsing");
+            }
+
             for (int i = 0; i < lines.Length && i < 4; i++)
             {
                 var line = lines[i].Trim();
@@ -335,6 +423,7 @@ namespace BrotherConnection
         ///   4. Spindle (Type) - 1: Standard, 2: Large diameter, 3: Medium diameter
         ///   5. Spindle (Graph color) - 0: No color, 1: Blue, 2: Red, 3: Purple, 4: Green, 5: Light blue, 6: Yellow, 7: White
         /// Tool data (diameter, length, name, life) should be cross-referenced with tool table (TOLNI1).
+        /// Note: D00 may have different field positions or additional fields.
         /// </summary>
         /// <param name="lines">ATCTL file lines</param>
         /// <param name="toolTableData">Optional tool table data dictionary to cross-reference tool specs</param>
@@ -346,6 +435,25 @@ namespace BrotherConnection
             {
                 Console.Error.WriteLine("[DEBUG] ParseAtctl: lines is null or empty");
                 return result;
+            }
+
+            // Version and unit-specific parsing
+            if (_controlVersion == ControlVersion.D00)
+            {
+                Console.Error.WriteLine($"[DEBUG] Using D00 schema for ATCTL parsing");
+            }
+            else
+            {
+                Console.Error.WriteLine($"[DEBUG] Using C00 schema for ATCTL parsing");
+            }
+            
+            if (_unitSystem == UnitSystem.Inch)
+            {
+                Console.Error.WriteLine($"[DEBUG] Using Inch unit system for ATCTL parsing");
+            }
+            else
+            {
+                Console.Error.WriteLine($"[DEBUG] Using Metric unit system for ATCTL parsing");
             }
 
             Console.Error.WriteLine($"[DEBUG] ParseAtctl: Processing {lines.Length} lines");
@@ -600,6 +708,7 @@ namespace BrotherConnection
         /// Parse PANEL file - panel/operator interface data.
         /// May contain ATC status or other panel-related information.
         /// Format: CSV-like or key-value pairs
+        /// Note: D00 may have different field positions or field names.
         /// </summary>
         public Dictionary<string, string> ParsePanel(string[] lines)
         {
@@ -607,6 +716,25 @@ namespace BrotherConnection
             
             if (lines == null || lines.Length == 0)
                 return result;
+
+            // Version and unit-specific parsing
+            if (_controlVersion == ControlVersion.D00)
+            {
+                Console.Error.WriteLine($"[DEBUG] Using D00 schema for PANEL parsing");
+            }
+            else
+            {
+                Console.Error.WriteLine($"[DEBUG] Using C00 schema for PANEL parsing");
+            }
+            
+            if (_unitSystem == UnitSystem.Inch)
+            {
+                Console.Error.WriteLine($"[DEBUG] Using Inch unit system for PANEL parsing");
+            }
+            else
+            {
+                Console.Error.WriteLine($"[DEBUG] Using Metric unit system for PANEL parsing");
+            }
 
             foreach (var line in lines)
             {
@@ -676,6 +804,7 @@ namespace BrotherConnection
         ///   Field 21: Virtual teeth direction (1 char)
         /// Y01-Y99: Group data (tool numbers in groups)
         /// M01-M99: Min/max values
+        /// Note: D00 may have different field positions, digit counts, or additional fields.
         /// </summary>
         public Dictionary<string, string> ParseTolni(string[] lines)
         {
@@ -683,6 +812,26 @@ namespace BrotherConnection
             
             if (lines == null || lines.Length == 0)
                 return result;
+
+            // Version and unit-specific parsing
+            // Note: TOLNI1 likely has unit-specific differences in field positions and digit counts
+            if (_controlVersion == ControlVersion.D00)
+            {
+                Console.Error.WriteLine($"[DEBUG] Using D00 schema for TOLNI1 parsing");
+            }
+            else
+            {
+                Console.Error.WriteLine($"[DEBUG] Using C00 schema for TOLNI1 parsing");
+            }
+            
+            if (_unitSystem == UnitSystem.Inch)
+            {
+                Console.Error.WriteLine($"[DEBUG] Using Inch unit system for TOLNI1 parsing");
+            }
+            else
+            {
+                Console.Error.WriteLine($"[DEBUG] Using Metric unit system for TOLNI1 parsing");
+            }
 
             var tools = new List<string>();
             int toolCount = 0;
@@ -885,6 +1034,7 @@ namespace BrotherConnection
         /// <summary>
         /// Parse MONTR file - monitor data (cycle time, cutting time, operation time, power on hours).
         /// Format: CSV-like or key-value pairs
+        /// Note: D00 may have different field positions or field names.
         /// </summary>
         public Dictionary<string, string> ParseMontr(string[] lines)
         {
@@ -892,6 +1042,25 @@ namespace BrotherConnection
             
             if (lines == null || lines.Length == 0)
                 return result;
+
+            // Version and unit-specific parsing
+            if (_controlVersion == ControlVersion.D00)
+            {
+                Console.Error.WriteLine($"[DEBUG] Using D00 schema for MONTR parsing");
+            }
+            else
+            {
+                Console.Error.WriteLine($"[DEBUG] Using C00 schema for MONTR parsing");
+            }
+            
+            if (_unitSystem == UnitSystem.Inch)
+            {
+                Console.Error.WriteLine($"[DEBUG] Using Inch unit system for MONTR parsing");
+            }
+            else
+            {
+                Console.Error.WriteLine($"[DEBUG] Using Metric unit system for MONTR parsing");
+            }
 
             foreach (var line in lines)
             {
@@ -946,9 +1115,9 @@ namespace BrotherConnection
         }
 
         /// <summary>
-        /// Parse POSNI1 file - work offset data (CSV format).
-        /// Format: G##,X,Y,Z,A,B,C or X##,X,Y,Z,A,B,C
-        /// Extended to parse G54-G59 and X01-X48
+        /// Parse POSN file - work offset data (CSV format).
+        /// Supports both POSNI (Inch) and POSNM (Metric) files.
+        /// Handles version-specific differences: C00 (G54, X01-X48) vs D00 (G054, X001-X300).
         /// </summary>
         public Dictionary<string, string> ParsePosni(string[] lines)
         {
@@ -956,6 +1125,28 @@ namespace BrotherConnection
             
             if (lines == null || lines.Length == 0)
                 return result;
+
+            // Get schema configuration based on control version
+            var schemaConfig = PosnSchemaConfig.GetConfig(_controlVersion);
+            
+            // Version and unit-specific parsing
+            if (_controlVersion == ControlVersion.D00)
+            {
+                Console.Error.WriteLine($"[DEBUG] Using D00 schema for POSN parsing (G054-G059, X001-X300, 11-digit fields)");
+            }
+            else
+            {
+                Console.Error.WriteLine($"[DEBUG] Using C00 schema for POSN parsing (G54-G59, X01-X48, 9-digit fields)");
+            }
+            
+            if (_unitSystem == UnitSystem.Inch)
+            {
+                Console.Error.WriteLine($"[DEBUG] Using Inch unit system for POSN parsing (from POSNI file)");
+            }
+            else
+            {
+                Console.Error.WriteLine($"[DEBUG] Using Metric unit system for POSN parsing (from POSNM file)");
+            }
 
             foreach (var line in lines)
             {
@@ -969,62 +1160,119 @@ namespace BrotherConnection
 
                 var offsetName = parts[0].Trim().ToUpper();
                 
+                // Check if offset name matches expected format for this schema
+                if (!schemaConfig.MatchesOffsetFormat(offsetName))
+                {
+                    // Skip offsets that don't match this schema's format
+                    continue;
+                }
+                
                 try
                 {
                     var x = parts.Length > 1 ? parts[1].Trim() : "0";
                     var y = parts.Length > 2 ? parts[2].Trim() : "0";
                     var z = parts.Length > 3 ? parts[3].Trim() : "0";
 
-                    // G54-G59 work offsets
-                    if (offsetName.StartsWith("G5"))
+                    // Normalize offset name for consistent output (G054 -> G54, X001 -> X1, etc.)
+                    var normalizedOffset = schemaConfig.NormalizeOffsetName(offsetName);
+
+                    // G54-G59 work offsets (C00: G54, D00: G054)
+                    if (offsetName.StartsWith("G"))
                     {
-                        var offsetNum = offsetName.Substring(1);
-                        result[$"Work offset G{offsetNum} X"] = x;
-                        result[$"Work offset G{offsetNum} Y"] = y;
-                        result[$"Work offset G{offsetNum} Z"] = z;
-                        // Add rotary axes if present
-                        if (parts.Length > 4)
-                            result[$"Work offset G{offsetNum} A"] = parts[4].Trim();
-                        if (parts.Length > 5)
-                            result[$"Work offset G{offsetNum} B"] = parts[5].Trim();
-                        if (parts.Length > 6)
-                            result[$"Work offset G{offsetNum} C"] = parts[6].Trim();
+                        // Extract number from G54 or G054
+                        var numMatch = Regex.Match(offsetName, @"^G(\d+)$");
+                        if (numMatch.Success && int.TryParse(numMatch.Groups[1].Value, out int gNum))
+                        {
+                            // C00: G54-G59, D00: G054-G059 (both represent same offsets)
+                            if (gNum >= 54 && gNum <= 59)
+                            {
+                                var offsetNum = gNum.ToString();
+                                result[$"Work offset G{offsetNum} X"] = x;
+                                result[$"Work offset G{offsetNum} Y"] = y;
+                                result[$"Work offset G{offsetNum} Z"] = z;
+                                // Add rotary axes if present
+                                if (parts.Length > 4)
+                                    result[$"Work offset G{offsetNum} A"] = parts[4].Trim();
+                                if (parts.Length > 5)
+                                    result[$"Work offset G{offsetNum} B"] = parts[5].Trim();
+                                if (parts.Length > 6)
+                                    result[$"Work offset G{offsetNum} C"] = parts[6].Trim();
+                            }
+                        }
                     }
-                    // X01-X48 extended offsets
+                    // Extended offsets (C00: X01-X48, D00: X001-X300)
                     else if (offsetName.StartsWith("X"))
                     {
-                        var offsetNum = offsetName.Substring(1);
-                        result[$"Extended offset X{offsetNum} X"] = x;
-                        result[$"Extended offset X{offsetNum} Y"] = y;
-                        result[$"Extended offset X{offsetNum} Z"] = z;
-                        // Add rotary axes if present
-                        if (parts.Length > 4)
-                            result[$"Extended offset X{offsetNum} A"] = parts[4].Trim();
-                        if (parts.Length > 5)
-                            result[$"Extended offset X{offsetNum} B"] = parts[5].Trim();
-                        if (parts.Length > 6)
-                            result[$"Extended offset X{offsetNum} C"] = parts[6].Trim();
+                        // Extract number from X01, X001, etc.
+                        var numMatch = Regex.Match(offsetName, @"^X(\d+)$");
+                        if (numMatch.Success && int.TryParse(numMatch.Groups[1].Value, out int xNum))
+                        {
+                            // Check if within valid range for this schema
+                            if (xNum >= schemaConfig.ExtendedOffsetRange.Min && xNum <= schemaConfig.ExtendedOffsetRange.Max)
+                            {
+                                var offsetNum = xNum.ToString();
+                                result[$"Extended offset X{offsetNum} X"] = x;
+                                result[$"Extended offset X{offsetNum} Y"] = y;
+                                result[$"Extended offset X{offsetNum} Z"] = z;
+                                // Add rotary axes if present
+                                if (parts.Length > 4)
+                                    result[$"Extended offset X{offsetNum} A"] = parts[4].Trim();
+                                if (parts.Length > 5)
+                                    result[$"Extended offset X{offsetNum} B"] = parts[5].Trim();
+                                if (parts.Length > 6)
+                                    result[$"Extended offset X{offsetNum} C"] = parts[6].Trim();
+                            }
+                        }
                     }
-                    // H01-H99 fixture offsets
+                    // H offsets (C00: H01, D00: H001)
                     else if (offsetName.StartsWith("H"))
                     {
-                        var offsetNum = offsetName.Substring(1);
-                        result[$"Fixture offset H{offsetNum} X"] = x;
-                        result[$"Fixture offset H{offsetNum} Y"] = y;
-                        result[$"Fixture offset H{offsetNum} Z"] = z;
+                        // Extract number from H01, H001, etc.
+                        var numMatch = Regex.Match(offsetName, @"^H(\d+)$");
+                        if (numMatch.Success && int.TryParse(numMatch.Groups[1].Value, out int hNum))
+                        {
+                            var offsetNum = hNum.ToString();
+                            result[$"Fixture offset H{offsetNum} X"] = x;
+                            result[$"Fixture offset H{offsetNum} Y"] = y;
+                            result[$"Fixture offset H{offsetNum} Z"] = z;
+                        }
                     }
-                    // B01-B08 rotary offsets
+                    // B offsets (C00: B01, D00: B001-B008)
                     else if (offsetName.StartsWith("B"))
                     {
-                        var offsetNum = offsetName.Substring(1);
-                        result[$"Rotary offset B{offsetNum} X"] = x;
-                        result[$"Rotary offset B{offsetNum} Y"] = y;
-                        result[$"Rotary offset B{offsetNum} Z"] = z;
+                        // Extract number from B01, B001, etc.
+                        var numMatch = Regex.Match(offsetName, @"^B(\d+)$");
+                        if (numMatch.Success && int.TryParse(numMatch.Groups[1].Value, out int bNum))
+                        {
+                            // Check if within valid range for this schema
+                            if (bNum >= schemaConfig.RotaryOffsetRange.Min && bNum <= schemaConfig.RotaryOffsetRange.Max)
+                            {
+                                var offsetNum = bNum.ToString();
+                                result[$"Rotary offset B{offsetNum} X"] = x;
+                                result[$"Rotary offset B{offsetNum} Y"] = y;
+                                result[$"Rotary offset B{offsetNum} Z"] = z;
+                                // B offsets may have additional fields (A, B, C axes, reference offsets)
+                                if (parts.Length > 4)
+                                    result[$"Rotary offset B{offsetNum} A"] = parts[4].Trim();
+                                if (parts.Length > 5)
+                                    result[$"Rotary offset B{offsetNum} B"] = parts[5].Trim();
+                                if (parts.Length > 6)
+                                    result[$"Rotary offset B{offsetNum} C"] = parts[6].Trim();
+                                // Additional fields for reference offsets (D00 has more fields)
+                                if (parts.Length > 7)
+                                    result[$"Rotary offset B{offsetNum} Reference X"] = parts[7].Trim();
+                                if (parts.Length > 8)
+                                    result[$"Rotary offset B{offsetNum} Reference Y"] = parts[8].Trim();
+                                if (parts.Length > 9)
+                                    result[$"Rotary offset B{offsetNum} Reference Z"] = parts[9].Trim();
+                            }
+                        }
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // Skip malformed lines
+                    // Skip malformed lines, but log for debugging
+                    Console.Error.WriteLine($"[DEBUG] Failed to parse POSN line: {trimmed.Substring(0, Math.Min(50, trimmed.Length))} - {ex.Message}");
                     continue;
                 }
             }

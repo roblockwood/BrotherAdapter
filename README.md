@@ -7,10 +7,45 @@ This adapter translates data from Brother CNC machines into the MTConnect standa
 ## Features
 
 - **Real-time Data Collection**: Polls CNC machine every 2 seconds for production data
-- **MTConnect 1.7 Compliant**: Standard MTConnect REST API endpoints
+- **MTConnect 2.5 Compliant**: Standard MTConnect REST API endpoints
 - **Comprehensive Data Coverage**: Supports machine positions, tool data, work offsets, alarms, counters, and more
+- **Automatic Configuration Detection**: Automatically detects control version and unit system before parsing
+- **Version-Aware Parsing**: Supports C00 and D00 control versions with schema-specific parsing
+- **Unit System Support**: Handles both Metric and Inch unit systems with appropriate schema handling
 - **Docker Ready**: Pre-built Docker images available on GitHub Container Registry
 - **Linux/Mono Compatible**: Runs on Linux using Mono runtime (.NET Framework 4.6.1)
+
+## Configuration Detection
+
+The adapter automatically detects the machine configuration before any data parsing occurs:
+
+### Control Version Detection
+
+The adapter detects the Brother CNC control version by checking for PRD files:
+- **C00**: Detected when `PRDC2.nc` is present
+- **D00**: Detected when `PRDD2.nc` is present (preferred if both exist)
+
+Detection happens at startup and is logged to the console. The detected version determines which file schemas and parsing logic to use, as different control versions may have different field positions, digit counts, or extended schemas.
+
+### Unit System Detection
+
+After control version detection, the adapter determines the unit system (Metric/Inch) by parsing the MSRRS file:
+- **C00**: Reads `MSRRSC.nc`
+- **D00**: Reads `MSRRSD.nc`
+
+The unit system value is read from the first line (C01) of the MSRRS file:
+- `0` = Metric (millimeters)
+- `1` = Inch
+
+The detected unit system affects parsing, as field positions, digit counts, and coordinate formats may differ between Metric and Inch configurations.
+
+### Detection Logging
+
+Both detection processes log their results to the console (visible in Docker logs):
+- `[INFO] Control version detected: D00 (PRDD2.nc found)`
+- `[INFO] Unit system detected: Metric (from MSRRSC, value: 0)`
+
+If detection fails, the adapter defaults to C00 control version and Metric unit system with warnings logged.
 
 ## Quick Start
 
@@ -116,32 +151,53 @@ curl http://localhost:7878/current
 
 ## Data Sources
 
-The adapter collects data from Brother CNC machine files via the LOD protocol:
+The adapter collects data from Brother CNC machine files via the LOD protocol. All parsers are version-aware (C00/D00) and unit-aware (Metric/Inch), automatically using the appropriate schema based on the detected configuration.
+
+### Detection Files (Loaded Once at Startup)
+
+- **PRDC2.nc / PRDD2.nc** - Control version detection
+  - Determines which control version (C00/D00) is running
+
+- **MSRRSC.nc / MSRRSD.nc** - Unit system detection
+  - Determines unit system (Metric/Inch) from first line (C01)
+
+### Production Data Files
 
 - **PDSP** - Production data (real-time, every 2 seconds)
   - Machine positions, spindle speed, feedrate, status
+  - Uses version-specific mapping file (`ProductionData3.json` or `ProductionData3_C00.json` / `ProductionData3_D00.json`)
 
 - **MEM.NC** - Program name (every 10 seconds)
+  - Version and unit-aware parsing
 
 - **MONTR.NC** - Monitor data (every 10 seconds)
   - Cycle time, cutting time, operation time, power on hours
+  - Version and unit-aware parsing
 
 - **ALARM.NC** - Alarm/error status (every 10 seconds)
   - Alarm codes, messages, program, block, severity
+  - Version and unit-aware parsing
 
 - **WKCNTR.NC** - Workpiece counters (every 10 seconds)
   - Counter values, targets, end signals, status
+  - Version and unit-aware parsing
 
 - **TOLNI1.NC** - Tool table (every 10 seconds)
   - Complete tool definitions library
+  - Version and unit-aware parsing (field positions and digit counts may vary)
 
-- **POSNI1.NC** - Work offsets (every 10 seconds)
-  - G54-G59 and X01-X48 work offsets with rotary axes
+- **POSNI1.NC / POSNM1.NC** - Work offsets (every 10 seconds)
+  - POSNI1 = Inch unit system, POSNM1 = Metric unit system
+  - G54-G59 and X01-X48 work offsets with rotary axes (C00)
+  - G054-G059 and X001-X300 work offsets with rotary axes (D00)
+  - Version and unit-aware parsing (coordinate values and digit counts may vary)
 
 - **ATCTL.NC** - ATC tool control (every 10 seconds)
   - Tools currently loaded in ATC magazine
+  - Version and unit-aware parsing
 
 - **PANEL.NC** - Panel/operator interface state (every 10 seconds)
+  - Version and unit-aware parsing
 
 ## Docker Deployment
 
@@ -197,10 +253,14 @@ docker run -p 7878:7878 \
 ### Project Structure
 
 - `BrotherConnection/` - Main application code
-  - `Program.cs` - Main entry point, data collection loop
+  - `Program.cs` - Main entry point, data collection loop, version/unit detection
   - `MTConnectServer.cs` - HTTP server for MTConnect endpoints
-  - `FileLoader.cs` - File loading and parsing via LOD protocol
+  - `FileLoader.cs` - File loading and parsing via LOD protocol (version and unit-aware)
   - `Request.cs` - LOD protocol communication
+  - `ControlVersion.cs` - Control version enum (C00, D00, Unknown)
+  - `ControlVersionDetector.cs` - Detects control version from PRD files
+  - `UnitSystem.cs` - Unit system enum (Metric, Inch, Unknown)
+  - `UnitSystemDetector.cs` - Detects unit system from MSRRS files
   - `Mapping/` - Data mapping definitions
 
 ### Requirements
@@ -229,6 +289,38 @@ The adapter logs detailed error messages for connection failures:
 - `ConnectionRefused` - CNC machine not accepting connections
 - `TimedOut` - Network timeout, check firewall/routing
 - `HostUnreachable` - Cannot reach CNC machine IP
+
+### Detection Issues
+
+If control version or unit system detection fails:
+- Check Docker logs for detection messages: `docker logs <container-name>`
+- Verify the CNC machine is accessible and responding to LOD commands
+- Ensure PRDC2/PRDD2 files are accessible for version detection
+- Ensure MSRRSC/MSRRSD files are accessible for unit system detection
+- The adapter will default to C00 and Metric with warnings if detection fails
+- Incorrect defaults may cause parsing errors - check logs for schema mismatch warnings
+
+## MTConnect 2.5 Migration
+
+This adapter has been migrated from MTConnect 1.7 to 2.5. Key changes:
+
+- **Namespaces**: Updated to MTConnect 2.5 namespaces
+- **Schemas**: Validated against MTConnect 2.5 XSD schemas
+- **Version**: Header version updated to 2.5.0
+
+### Validation
+
+XML output can be validated using the provided `XmlValidator` class or external tools. See [VALIDATION.md](VALIDATION.md) for details.
+
+### Backward Compatibility
+
+**Breaking Change**: The adapter now uses MTConnect 2.5 namespaces and schemas. Clients using MTConnect 1.7 may need to be updated to support 2.5. See [BACKWARD_COMPATIBILITY.md](BACKWARD_COMPATIBILITY.md) for details.
+
+### Testing
+
+- Integration testing guide: [INTEGRATION_TESTING.md](INTEGRATION_TESTING.md)
+- Schema validation: [VALIDATION.md](VALIDATION.md)
+- Backward compatibility: [BACKWARD_COMPATIBILITY.md](BACKWARD_COMPATIBILITY.md)
 
 ## License
 
