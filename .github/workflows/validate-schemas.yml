@@ -1,0 +1,62 @@
+name: Validate MTConnect Schemas
+
+on:
+  push:
+    paths:
+      - 'BrotherConnection/MTConnectServer.cs'
+      - 'BrotherConnection/XmlValidator.cs'
+      - 'schemas/**'
+      - '.github/workflows/validate-schemas.yml'
+  pull_request:
+    paths:
+      - 'BrotherConnection/MTConnectServer.cs'
+      - 'BrotherConnection/XmlValidator.cs'
+      - 'schemas/**'
+      - '.github/workflows/validate-schemas.yml'
+  workflow_dispatch:
+
+jobs:
+  validate-schemas:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Mono
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mono-complete msbuild nuget
+
+      - name: Restore NuGet packages
+        working-directory: BrotherConnection
+        run: nuget restore ../BrotherConnection.sln -NonInteractive
+
+      - name: Build project
+        working-directory: BrotherConnection
+        run: msbuild ../BrotherConnection.sln /p:Configuration=Release /p:Platform="Any CPU" /t:Build /nologo /verbosity:minimal
+
+      - name: Verify schema files exist
+        run: |
+          if [ ! -f "schemas/MTConnectDevices_2.5.xsd" ]; then
+            echo "ERROR: MTConnectDevices_2.5.xsd not found"
+            exit 1
+          fi
+          if [ ! -f "schemas/MTConnectStreams_2.5.xsd" ]; then
+            echo "ERROR: MTConnectStreams_2.5.xsd not found"
+            exit 1
+          fi
+          echo "Schema files verified"
+
+      - name: Run schema validation
+        working-directory: BrotherConnection
+        run: |
+          echo "Running MTConnect 2.5 schema validation..."
+          mono bin/Release/BrotherConnection.exe --validate-schemas
+        continue-on-error: false
+
+      - name: Validation summary
+        if: success()
+        run: |
+          echo "✅ All MTConnect 2.5 schema validations passed!"
+

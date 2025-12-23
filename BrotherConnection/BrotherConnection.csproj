@@ -48,15 +48,23 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="ControlVersion.cs" />
+    <Compile Include="ControlVersionDetector.cs" />
+    <Compile Include="UnitSystem.cs" />
+    <Compile Include="UnitSystemDetector.cs" />
     <Compile Include="FileLoader.cs" />
     <Compile Include="Mapping\DataMap.cs" />
     <Compile Include="Mapping\EnumValue.cs" />
     <Compile Include="Mapping\Item.cs" />
     <Compile Include="Mapping\Line.cs" />
     <Compile Include="MTConnectServer.cs" />
+    <Compile Include="MTConnectServerTests.cs" />
     <Compile Include="Program.cs" />
+    <Compile Include="XmlValidator.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Request.cs" />
+    <Compile Include="Schema\FileSchemaConfig.cs" />
+    <Compile Include="Schema\PosnSchemaConfig.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
