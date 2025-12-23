@@ -15,6 +15,10 @@ on:
       - '.github/workflows/validate-schemas.yml'
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate-schemas:
     runs-on: ubuntu-latest
@@ -26,11 +30,17 @@ jobs:
       - name: Setup Mono
         run: |
           sudo apt-get update
-          sudo apt-get install -y mono-complete msbuild nuget
+          sudo apt-get install -y mono-complete ca-certificates-mono
+          
+      - name: Install NuGet
+        run: |
+          curl -L https://dist.nuget.org/win-x86-commandline/latest/nuget.exe -o nuget.exe
+          chmod +x nuget.exe
+          sudo mv nuget.exe /usr/local/bin/
 
       - name: Restore NuGet packages
         working-directory: BrotherConnection
-        run: nuget restore ../BrotherConnection.sln -NonInteractive
+        run: mono /usr/local/bin/nuget.exe restore ../BrotherConnection.sln -NonInteractive
 
       - name: Build project
         working-directory: BrotherConnection

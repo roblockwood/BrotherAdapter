@@ -11,17 +11,23 @@ RUN sed -i 's|http://deb.debian.org/debian|http://archive.debian.org/debian|g' /
     sed -i '/stretch-updates/d' /etc/apt/sources.list || true
 
 # Install build tools
+# mono-complete includes MSBuild, and we'll install NuGet separately
 RUN apt-get update && apt-get install -y \
-    nuget \
-    msbuild \
+    mono-complete \
+    ca-certificates-mono \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Download and install NuGet
+RUN curl -L https://dist.nuget.org/win-x86-commandline/latest/nuget.exe -o /usr/local/bin/nuget.exe && \
+    chmod +x /usr/local/bin/nuget.exe
 
 # Copy solution and project files
 COPY BrotherConnection.sln .
 COPY BrotherConnection/ ./BrotherConnection/
 
 # Restore NuGet packages
-RUN nuget restore BrotherConnection.sln -NonInteractive
+RUN mono /usr/local/bin/nuget.exe restore BrotherConnection.sln -NonInteractive
 
 # Build the application using MSBuild
 RUN msbuild BrotherConnection.sln /p:Configuration=Release /p:Platform="Any CPU" /t:Build
@@ -36,11 +42,9 @@ RUN sed -i 's|http://deb.debian.org/debian|http://archive.debian.org/debian|g' /
     sed -i 's|http://security.debian.org/debian-security|http://archive.debian.org/debian-security|g' /etc/apt/sources.list && \
     sed -i '/stretch-updates/d' /etc/apt/sources.list || true
 
-# Install curl for health checks (and remove build tools to reduce size)
+# Install curl for health checks
 RUN apt-get update && apt-get install -y \
     curl \
-    && apt-get remove -y --purge nuget msbuild 2>/dev/null || true \
-    && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy published application
