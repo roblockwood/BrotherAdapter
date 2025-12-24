@@ -1,0 +1,176 @@
+# BrotherAdapter Cursor Rules
+
+## File Type Schema Update Workflow
+
+When adding or updating parsing for a new Brother CNC file type, follow this systematic workflow to ensure version/unit-aware parsing and MTConnect compliance.
+
+### Step 1: File Type Analysis
+
+Before implementing, answer these questions:
+
+1. **Filename Variations by Control Version?**
+   - Does the filename change based on control version (C00/D00)?
+   - Example: PRD files → PRDC2.nc (C00), PRDD2.nc (D00)
+   - Document the pattern: `{PREFIX}{VERSION}{SUFFIX}.nc`
+
+2. **Filename Variations by Unit System?**
+   - Does the filename change based on unit system (Metric/Inch)?
+   - Example: POSN files → POSNI.nc (Inch), POSNM.nc (Metric)
+   - Document the pattern: `{PREFIX}{UNIT}{SUFFIX}.nc`
+
+3. **File Content Unit-Aware?**
+   - Are the values in the file in the machine's native units (Metric/Inch)?
+   - If yes, values must be converted to millimeters for MTConnect output
+   - If no (unitless), values can be used as-is
+
+4. **Schema Differences Between Versions?**
+   - Review schema references for C00 and D00
+   - Identify differences:
+     - Field lengths (e.g., 9 digits vs 11 digits)
+     - Format strings (e.g., "G{0}" vs "G{0:D3}")
+     - Ranges (e.g., X01-X48 vs X001-X300)
+     - Field positions or structure changes
+
+### Step 2: Schema Configuration
+
+1. **Create or Update Schema Config Class**
+   - Location: `BrotherConnection/Schema/{FileType}SchemaConfig.cs`
+   - Implement `IFileSchemaConfig` interface
+   - Define static instances for each version:
+     ```csharp
+     public static {FileType}SchemaConfig C00 = new {FileType}SchemaConfig { ... };
+     public static {FileType}SchemaConfig D00 = new {FileType}SchemaConfig { ... };
+     ```
+   - Implement `GetConfig(ControlVersion version)` method
+   - Implement `NormalizeOffsetName()` if applicable (for offset naming)
+   - Implement `MatchesOffsetFormat()` if applicable (for validation)
+
+2. **Update Base Interface if Needed**
+   - If new schema properties are needed, update `IFileSchemaConfig` in `FileSchemaConfig.cs`
+   - Use `OffsetRange` struct for min/max ranges
+
+### Step 3: FileLoader Updates
+
+1. **Add/Update Load Method**
+   - If filename varies by unit system, create `Load{FileType}File()` method
+   - Example: `LoadPosnFile(int dataBankNumber = 1)` selects POSNI or POSNM
+   - If filename varies by version, handle in detection logic
+
+2. **Update Parse Method**
+   - Use schema config: `var schema = {FileType}SchemaConfig.GetConfig(_controlVersion);`
+   - Log which schema and unit system are being used
+   - Apply schema properties (field lengths, formats, ranges) during parsing
+   - Normalize offset names using `schema.NormalizeOffsetName()`
+   - Store parsed data with consistent key naming: `"{Type} {Name} {Axis}"`
+
+3. **Unit System Logging**
+   - Add logging: `Console.WriteLine($"[INFO] Parsing {fileType} using {_controlVersion} schema, {_unitSystem} units");`
+
+### Step 4: MTConnect Output Updates
+
+1. **Probe XML (Device Structure)**
+   - Add DataItem definitions for all parsed data
+   - **Position data items**: Always use `units="MILLIMETER"` (MTConnect standard)
+   - **Rotary position data items**: Use `type="POSITION"` with `subType="ACTUAL"` and `units="DEGREE"` (NOT `ROTARY_VELOCITY`)
+   - Use consistent ID naming: `{type}_{identifier}_{axis}` (e.g., `work_offset_g54_x`)
+   - If ranges vary by version, define max range in probe XML (e.g., X01-X300 for D00)
+
+2. **Current XML (Data Values)**
+   - Extract values from `_latestData` dictionary
+   - **Apply unit conversion**: Use `ConvertPositionValue()` for all X, Y, Z position values if unit system is Inch
+   - **Rotary axes**: Output as `<Position>` with `subType="ACTUAL"`, NOT `<RotaryVelocity>`
+   - Only output non-zero values if desired (for cleaner output)
+   - Use `EscapeXml()` for all string values
+
+3. **Unit Conversion**
+   - All position values (X, Y, Z) must be in millimeters for MTConnect
+   - Use `ConvertPositionValue()` helper method in `MTConnectServer`
+   - Conversion: `inches * 25.4 = millimeters`
+   - Rotary axes (A, B, C) are in degrees and do NOT need conversion
+
+### Step 5: Program.cs Integration
+
+1. **File Loading**
+   - If unit-aware filename: Use `fileLoader.Load{FileType}File()` instead of `LoadFile()`
+   - Pass data bank number if applicable
+   - Handle version-specific filenames if needed
+
+2. **Data Updates**
+   - Call `mtconnectServer.UpdateData(parsedData)` after parsing
+   - Ensure data keys match what MTConnectServer expects
+
+### Step 6: Validation Checklist
+
+Before considering the update complete:
+
+- [ ] Schema config class created/updated with C00 and D00 definitions
+- [ ] FileLoader parse method uses schema config
+- [ ] Unit system detection affects file loading (if applicable)
+- [ ] All position values converted to millimeters (if unit-aware)
+- [ ] Probe XML includes all data items with correct types
+- [ ] Current XML outputs values correctly
+- [ ] Rotary axes use `POSITION` type, not `ROTARY_VELOCITY`
+- [ ] Logging indicates which schema/unit system is being used
+- [ ] No linter errors
+- [ ] MTConnect XML validates against schema (if schema validation available)
+
+### Step 7: Documentation
+
+Update `README.md`:
+- Add file type to "Data Sources" section
+- Note version/unit awareness
+- Document any special parsing considerations
+
+## Common Patterns
+
+### Offset Naming Normalization
+```csharp
+// C00: G54, X01, H01, B01
+// D00: G054, X001, H001, B001
+// Normalize to: G54, X1, H1, B1 (remove leading zeros)
+```
+
+### Unit Conversion Pattern
+```csharp
+// In MTConnectServer.GenerateCurrentXml()
+string value = ConvertPositionValue(
+    _latestData.ContainsKey("Key") ? _latestData["Key"] : "0"
+);
+```
+
+### Schema Config Pattern
+```csharp
+public static {FileType}SchemaConfig C00 = new {FileType}SchemaConfig
+{
+    CoordinateFieldLength = 9,
+    WorkOffsetFormat = "G{0}",
+    ExtendedOffsetRange = new OffsetRange(1, 48),
+    // ... other properties
+};
+```
+
+## MTConnect Compliance Rules
+
+1. **Units**: All position data MUST be in `MILLIMETER` units
+2. **Rotary Positions**: Use `POSITION` type with `subType="ACTUAL"` and `units="DEGREE"`
+3. **Rotary Velocities**: Use `ROTARY_VELOCITY` type with `units="REVOLUTION/MINUTE"` (for spindle speed, not positions)
+4. **Data Item IDs**: Must be unique, descriptive, and consistent
+5. **Coordinate Systems**: Use `coordinateSystem="WORK"` for work offsets, `coordinateSystem="MACHINE"` for machine coordinates
+
+## File Type Reference
+
+### Currently Supported Files
+- **PDSP** (ProductionData3): Real-time data, unit-aware, version-specific mapping files
+- **MEM**: Program name, unitless
+- **ALARM**: Alarm data, unitless
+- **WKCNTR**: Workpiece counters, unitless
+- **TOLNI1/TOLNM1**: Tool table, unit-aware filename
+- **ATCTL**: ATC tools, unitless
+- **POSNI1/POSNM1**: Work offsets, unit-aware filename, version-aware schema
+- **MONTR**: Monitor data, unitless
+- **PANEL**: Panel data, unitless
+
+### Detection Files
+- **PRDC2/PRDD2**: Control version detection (C00/D00)
+- **MSRRSC/MSRRSD**: Unit system detection (Metric/Inch)
+
