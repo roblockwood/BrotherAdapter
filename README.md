@@ -113,12 +113,31 @@ curl http://localhost:7878/current
 
 ### Tool Data
 
-- **Tool Table** (`tool_table`): Complete tool definitions library from TOLNI1.NC
-  - Format: Pipe-delimited string with tool number, length, diameter, name
+- **Tool Table** (`tool_table`): Complete tool definitions library from TOLNI/TOLNM files
+  - **File Selection**: Automatically selects TOLNI1 (Inch) or TOLNM1 (Metric) based on detected unit system
+  - **Version Support**: 
+    - C00: T01-T99 (2-digit tool numbers)
+    - D00: T001-T300 (3-digit tool numbers, normalized to T1-T300 in output)
+  - **Format**: Pipe-delimited string with tool number, length, diameter, name
+  - **Unit Conversion**: All dimension values (length, diameter, position offsets) are converted to millimeters for MTConnect output, regardless of source file unit system
+  - **Example**: `T1,LEN=127.0,DIA=12.7,NAME=End Mill|T2,LEN=50.8,DIA=6.35,NAME=Drill`
+  - Tool numbers are normalized (leading zeros removed) for consistent output
 
-- **ATC Tool Table** (`atc_table`): Tools currently loaded in ATC magazine from ATCTL.NC
-  - Format: Pipe-delimited string with pot number, tool number, name, length, diameter, group, life, type, color
-  - Example: `P1:T1:.250 3FL:LEN=3.4494:DIA=0.25:GRP=1:LIFE=9952:TYPE=1:COL=0|...`
+- **ATC Tool Table** (`atc_table`): Tools currently loaded in ATC magazine
+  - **File Selection**: Automatically selects ATCTL (C00) or ATCTLD (D00) based on detected control version
+  - **Version Support**:
+    - C00: ATCTL file, M01-M51 entries (Spindle + Pots 1-50), Tool No. 0/1-99/255
+    - D00: ATCTLD file, M01-M51 entries (Spindle + Pots 1-50), Tool No. 0/1-99/201-299/999, additional stocker entries (R01-R51, L01-L51)
+  - **Format**: Pipe-delimited string with schema fields only: pot/spindle identifier, tool number, name (cross-referenced), conversation/NC, group/main tool, type, color, store tool stocker (D00 only)
+  - **Fields from ATCTL schema**: Tool Number, Conversation/NC (0=Conversation, 1=NC), Group/Main Tool, Type (1=Standard, 2=Large diameter, 3=Medium diameter for C00), Color (0-7), Store Tool Stocker (D00 only: 0=Possible, 1=Not possible)
+  - **Note**: Tool name is cross-referenced from tool table for convenience. Length, diameter, and life are NOT in ATCTL schema - see tool table (`tool_table`) for those values.
+  - **Example**: `SPINDLE:T24:End Mill:CONVNC=1:GRP=1:TYPE=1:COL=0|P1:T1:.250 3FL:CONVNC=1:GRP=1:TYPE=1:COL=0:STORE=0|...`
+  - All fields are unitless (no conversion needed)
+
+- **ATC Stockers** (`atc_stockers`): Tool stockers (D00 only)
+  - Right stockers (R01-R51) and Left stockers (L01-L51)
+  - Format: Pipe-delimited string with stocker identifier, tool number, name, conversation/NC, group, type, color, store tool stocker
+  - Example: `R1:T5:Drill:CONVNC=1:GRP=2:TYPE=3:COL=1:STORE=0|L1:T10:End Mill:CONVNC=1:GRP=1:TYPE=1:COL=0:STORE=0|...`
 
 ### Workpiece Counters
 
@@ -149,9 +168,23 @@ curl http://localhost:7878/current
 - **Controller Mode**: `mode` (CONTROLLER_MODE, EVENT)
 - **Program Name**: `program` (PROGRAM, EVENT)
 
+### Macro Variables
+
+- **Macro Variables** (`macro_variables`): User-defined macro variables (DATA_SET, EVENT)
+  - **File Selection**: Automatically selects MCRNI1 (Inch) or MCRNM1 (Metric) based on detected unit system
+  - **Version Support**:
+    - C00: Comma-delimited format, C500-C999 variables
+    - D00: CR+LF (line break) delimited format, C500-C999 variables
+  - **Format**: Pipe-delimited string with variable name and value: `C500=value|C501=value|...`
+  - **Data Length**: 11 characters per variable value
+  - **Range**: -999999.999~999999.999 (Metric) or -99999.9999~99999.9999 (Inch)
+  - **Example**: `C500=123.456|C501=-45.678|C502=0.000|...`
+  - Values are unit-aware (Metric/Inch) but typically represent unitless numeric values used in programs
+  - **Note**: C00 Type 1 (MCRNun) - last digit is blank space when unit is micron. D00 Type 2 (MCRSun) - one more decimal digit when smallest unit system option purchased.
+
 ## Data Sources
 
-The adapter collects data from Brother CNC machine files via the LOD protocol. All parsers are version-aware (C00/D00) and unit-aware (Metric/Inch), automatically using the appropriate schema based on the detected configuration.
+The adapter collects data from Brother CNC machine files via the LOD protocol. All parsers are version-aware (C00/D00) and unit-aware (Metric/Inch), automatically using the appropriate schema based on the detected configuration. Position and dimension values are automatically converted to millimeters for MTConnect output, regardless of the source file unit system.
 
 ### Detection Files (Loaded Once at Startup)
 
@@ -182,9 +215,14 @@ The adapter collects data from Brother CNC machine files via the LOD protocol. A
   - Counter values, targets, end signals, status
   - Version and unit-aware parsing
 
-- **TOLNI1.NC** - Tool table (every 10 seconds)
-  - Complete tool definitions library
-  - Version and unit-aware parsing (field positions and digit counts may vary)
+- **TOLNI1.NC / TOLNM1.NC** - Tool table (every 10 seconds)
+  - **File Selection**: TOLNI1 = Inch unit system, TOLNM1 = Metric unit system (automatically selected)
+  - Complete tool definitions library with length, diameter, name, life, type, position offsets
+  - **Version Differences**:
+    - C00: T01-T99 format, tool life fields 6 chars, rotation feed at field 10
+    - D00: T001-T300 format, tool life fields 7 chars, peripheral speed field added, rotation feed at field 11, F command at field 13
+  - **Unit Conversion**: All position/dimension values automatically converted to millimeters for MTConnect output
+  - Version and unit-aware parsing with schema-specific field positions and digit counts
 
 - **POSNI1.NC / POSNM1.NC** - Work offsets (every 10 seconds)
   - POSNI1 = Inch unit system, POSNM1 = Metric unit system
@@ -192,12 +230,30 @@ The adapter collects data from Brother CNC machine files via the LOD protocol. A
   - G054-G059 and X001-X300 work offsets with rotary axes (D00)
   - Version and unit-aware parsing (coordinate values and digit counts may vary)
 
-- **ATCTL.NC** - ATC tool control (every 10 seconds)
-  - Tools currently loaded in ATC magazine
-  - Version and unit-aware parsing
+- **ATCTL.NC / ATCTLD.NC** - ATC tool control (every 10 seconds)
+  - **File Selection**: Automatically selects ATCTL (C00) or ATCTLD (D00) based on detected control version
+  - Tools currently loaded in ATC magazine (Spindle M01 + Pots M02-M51)
+  - **C00 Format**: ATCTL file with M01-M51 entries, 5 fields per entry (Tool No., Conversation/NC, Group/Main Tool, Type, Color)
+  - **D00 Format**: ATCTLD file with M01-M51 entries (6 fields: adds Store Tool Stocker), plus R01-R51 (right stockers), L01-L51 (left stockers), W01/E01 (stocker attributes)
+  - Version-aware parsing (tool number ranges, type values, additional fields differ by version)
+  - All fields are unitless (no unit conversion needed)
 
 - **PANEL.NC** - Panel/operator interface state (every 10 seconds)
   - Version and unit-aware parsing
+
+- **MCRNI1.NC / MCRNM1.NC** - Macro variables (Type 1, every 10 seconds)
+  - **File Selection**: MCRNI1 = Inch unit system, MCRNM1 = Metric unit system (automatically selected)
+  - User-defined macro variables C500-C999
+  - **Version Differences**:
+    - C00: Comma-delimited format (`,`) - variables separated by commas on one or few lines
+    - D00: CR+LF (line break) delimited format - one variable per line
+  - **Data Format**: Each variable has 11-character value
+  - **Range**: -999999.999~999999.999 (Metric) or -99999.9999~99999.9999 (Inch)
+  - **Special Notes**:
+    - C00: Last digit is blank space when unit is micron
+    - D00 Type 2 (MCRSun): One more decimal digit when smallest unit system option purchased
+  - Values are unit-aware but typically represent unitless numeric values used in CNC programs
+  - Version and unit-aware parsing with schema-specific delimiter handling
 
 ## Docker Deployment
 
@@ -261,6 +317,10 @@ docker run -p 7878:7878 \
   - `ControlVersionDetector.cs` - Detects control version from PRD files
   - `UnitSystem.cs` - Unit system enum (Metric, Inch, Unknown)
   - `UnitSystemDetector.cs` - Detects unit system from MSRRS files
+  - `Schema/` - Schema configuration classes for version-specific file parsing
+    - `FileSchemaConfig.cs` - Base interface for schema configurations
+    - `PosnSchemaConfig.cs` - Schema config for POSN files (work offsets)
+    - `TolniSchemaConfig.cs` - Schema config for TOLN files (tool table)
   - `Mapping/` - Data mapping definitions
 
 ### Requirements

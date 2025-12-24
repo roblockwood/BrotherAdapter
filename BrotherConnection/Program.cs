@@ -291,13 +291,13 @@ namespace BrotherConnection
                         Console.Error.WriteLine($"[WARNING] Failed to load/parse WKCNTR: {ex.Message}");
                     }
                     
-                    // Load TOLNI1 (tool table)
+                    // Load TOLN file (tool table) - uses TOLNI for Inch or TOLNM for Metric
                     try
                     {
-                        var tolniLines = fileLoader.LoadFile("TOLNI1");
+                        var tolniLines = fileLoader.LoadTolniFile(1);
                         if (tolniLines != null && tolniLines.Length > 0)
                         {
-                            Console.Error.WriteLine($"[DEBUG] Loaded TOLNI1 ({tolniLines.Length} lines), first 5 lines:");
+                            Console.Error.WriteLine($"[DEBUG] Loaded TOLN file ({tolniLines.Length} lines), first 5 lines:");
                             for (int i = 0; i < Math.Min(5, tolniLines.Length); i++)
                             {
                                 Console.Error.WriteLine($"[DEBUG]   [{i}] {tolniLines[i]}");
@@ -312,7 +312,7 @@ namespace BrotherConnection
                     }
                     catch (Exception ex)
                     {
-                        Console.Error.WriteLine($"[WARNING] Failed to load/parse TOLNI1: {ex.Message}");
+                        Console.Error.WriteLine($"[WARNING] Failed to load/parse TOLN file: {ex.Message}");
                     }
                     
                     // Load POSN file (work offsets) - uses POSNI for Inch or POSNM for Metric
@@ -351,15 +351,17 @@ namespace BrotherConnection
                         Console.Error.WriteLine($"[WARNING] Failed to load/parse MONTR: {ex.Message}");
                     }
                     
-                    // Load ATCTL (ATC control - tools currently loaded in ATC magazine)
-                    // User confirmed ATCTL contains the pot-to-tool mapping
+                    // Load ATCTL/ATCTLD (ATC control - tools currently loaded in ATC magazine)
+                    // C00 uses ATCTL, D00 uses ATCTLD
                     // Cross-reference with tool table (TOLNI1) for tool specs (diameter, length, group, life, type)
                     try
                     {
-                        var atctlLines = fileLoader.LoadFile("ATCTL");
+                        // Use version-specific filename
+                        var atctlFilename = (detectedVersion == ControlVersion.D00) ? "ATCTLD" : "ATCTL";
+                        var atctlLines = fileLoader.LoadFile(atctlFilename);
                         if (atctlLines != null && atctlLines.Length > 0)
                         {
-                            Console.Error.WriteLine($"[DEBUG] Loaded ATCTL ({atctlLines.Length} lines), first 10 lines:");
+                            Console.Error.WriteLine($"[DEBUG] Loaded {atctlFilename} ({atctlLines.Length} lines), first 10 lines:");
                             for (int i = 0; i < Math.Min(10, atctlLines.Length); i++)
                             {
                                 Console.Error.WriteLine($"[DEBUG]   [{i}] {atctlLines[i]}");
@@ -420,6 +422,24 @@ namespace BrotherConnection
                     catch (Exception ex)
                     {
                         Console.Error.WriteLine($"[WARNING] Failed to load/parse PANEL: {ex.Message}");
+                    }
+                    
+                    // Load macro variable file (MCRNun) - uses MCRNI for Inch or MCRNM for Metric
+                    try
+                    {
+                        var macroLines = fileLoader.LoadMacroFile(1); // Data bank 1 (MCRNI1 or MCRNM1)
+                        if (macroLines != null && macroLines.Length > 0)
+                        {
+                            var macroData = fileLoader.ParseMacro(macroLines);
+                            foreach (var kvp in macroData)
+                            {
+                                DecodedResults[kvp.Key] = kvp.Value;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[WARNING] Failed to load/parse macro variable file: {ex.Message}");
                     }
                 }
                 
