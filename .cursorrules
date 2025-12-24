@@ -1,0 +1,345 @@
+# BrotherAdapter Cursor Rules
+
+## File Type Schema Update Workflow
+
+When adding or updating parsing for a new Brother CNC file type, follow this systematic workflow to ensure version/unit-aware parsing and MTConnect compliance.
+
+It's absolutely critical that you switch to Planning mode before doing ABSOLUTELY ANYTHING ELSE. you need information from the user.
+### Step 0: Determine what to work on
+
+- Prompt the user; what data files are we working with? 
+- The user needs to provide schema documentation, ideally parsed from the manual. This is critical to ensure the scraping is performed accurately, and to ensures the right data is being output.
+
+### Step 1: File Type Analysis
+
+Before implementing, answer these questions by reviewing the schema documentation provided by the user:
+
+1. **Filename Variations by Control Version?**
+   - **REVIEW SCHEMA DOCUMENTATION** - The schema documentation will specify the filename for each version
+   - Example: ATCTL files → ATCTL (C00), ATCTLD (D00)
+   - Example: PRD files → PRDC2.nc (C00), PRDD2.nc (D00)
+   - Document the pattern: `{PREFIX}{VERSION}{SUFFIX}.nc` or version-specific names
+   - **The schema documentation provides the definitive answer - check the "Filename:" field in the schema**
+
+2. **Filename Variations by Unit System?**
+   - **REVIEW SCHEMA DOCUMENTATION** - The schema documentation will specify if different filenames are used for Metric vs Inch
+   - Example: POSN files → POSNI.nc (Inch), POSNM.nc (Metric)
+   - Example: TOLN files → TOLNI.nc (Inch), TOLNM.nc (Metric)
+   - Document the pattern: `{PREFIX}{UNIT}{SUFFIX}.nc`
+   - **The schema documentation provides the definitive answer - check if separate files are documented for Metric/Inch**
+
+3. **File Content Unit-Aware?**
+   - **REVIEW SCHEMA DOCUMENTATION** - The schema documentation will indicate if values are in machine native units
+   - Are the values in the file in the machine's native units (Metric/Inch)?
+   - If yes, values must be converted to millimeters for MTConnect output
+   - If no (unitless), values can be used as-is
+   - **The schema documentation typically indicates unit-aware fields (position/dimension values) vs unitless fields (counts, flags, etc.)**
+
+### Step 2: Schema Configuration
+
+1. **Schema Differences Between Versions?**
+   - Review schema references for C00 and D00
+   - **CRITICAL: Identify ALL fields present in the schema documentation**
+   - Create a complete field inventory:
+     - List every field, including optional ones
+     - Note field positions/indices for each version
+     - Document field types (numeric, string, enum, etc.)
+     - Identify which fields are unit-aware (require conversion)
+   - Identify differences:
+     - Field lengths (e.g., 9 digits vs 11 digits)
+     - Format strings (e.g., "G{0}" vs "G{0:D3}")
+     - Ranges (e.g., X01-X48 vs X001-X300)
+     - Field positions or structure changes
+     - **New fields added in one version vs another**
+     - **Field order changes between versions**
+
+2. **Create or Update Schema Config Class**
+   - Location: `BrotherConnection/Schema/{FileType}SchemaConfig.cs`
+   - Implement `IFileSchemaConfig` interface
+   - Define static instances for each version:
+     ```csharp
+     public static {FileType}SchemaConfig C00 = new {FileType}SchemaConfig { ... };
+     public static {FileType}SchemaConfig D00 = new {FileType}SchemaConfig { ... };
+     ```
+   - Implement `GetConfig(ControlVersion version)` method
+   - Implement `NormalizeOffsetName()` if applicable (for offset naming)
+   - Implement `MatchesOffsetFormat()` if applicable (for validation)
+
+3. **Update Base Interface if Needed**
+   - If new schema properties are needed, update `IFileSchemaConfig` in `FileSchemaConfig.cs`
+   - Use `OffsetRange` struct for min/max ranges
+
+### Step 3: FileLoader Updates
+
+1. **Add/Update Load Method**
+   - If filename varies by unit system, create `Load{FileType}File()` method
+   - Example: `LoadPosnFile(int dataBankNumber = 1)` selects POSNI or POSNM
+   - If filename varies by version, handle in detection logic
+
+2. **Update Parse Method**
+   - Use schema config: `var schema = {FileType}SchemaConfig.GetConfig(_controlVersion);`
+   - Log which schema and unit system are being used
+   - **CRITICAL: Parse ALL fields documented in the schema**
+   - For each field in the schema documentation:
+     - Extract the value from the correct field index (version-aware)
+     - Validate field length if specified in schema
+     - Apply unit conversion if field is unit-aware (position/dimension values)
+     - Add to result dictionary with descriptive key: `"{Type} {Name} {Attribute}"`
+     - **Add to output string/builder** that will be included in MTConnect output
+   - **DO NOT skip fields** - if a field exists in the schema, it must be parsed and output
+   - Apply schema properties (field lengths, formats, ranges) during parsing
+   - Normalize offset names using `schema.NormalizeOffsetName()`
+   - Store parsed data with consistent key naming: `"{Type} {Name} {Axis}"`
+   - **For aggregated outputs** (like tool table strings), include ALL parsed fields in the output format
+
+3. **Unit System Logging**
+   - Add logging: `Console.WriteLine($"[INFO] Parsing {fileType} using {_controlVersion} schema, {_unitSystem} units");`
+
+### Step 4: MTConnect Output Updates
+
+1. **Determine Appropriate MTConnect Component/Class**
+   - **CRITICAL: Each file type must have its own component section determined individually**
+   - Do NOT copy component assignments from other file types without analysis
+   - Evaluate the semantic meaning of the data to choose the correct component:
+     - **Controller**: Machine control state (execution, mode, program, availability, counters)
+     - **Systems**: Work coordinate systems and offsets (G54-G59, X01-X300, H, B offsets)
+     - **Variables**: User-defined macro variables (C500-C999)
+     - **ToolMagazine**: Tool-related data (tool table, ATC table, tool stockers)
+     - **Axes**: Machine axis positions (X, Y, Z actual positions)
+     - **Spindle**: Spindle-related data (speed, state)
+     - **Path**: Path-related data (feedrate, path state)
+   - **Decision Process**:
+     1. What is the semantic category of this data? (e.g., "macro variables" → Variables component)
+     2. Does an existing component match this category? If yes, use it. If no, create new or use most appropriate.
+     3. Never place data in a component just because another similar data type is there
+     4. Each file type should be evaluated independently for component assignment
+   - **Examples**:
+     - Tool table (TOLN) → ToolMagazine component (semantic match: tool data)
+     - ATC table (ATCTL) → ToolMagazine component (semantic match: tool magazine data)
+     - Macro variables (MCRN) → Variables component (semantic match: user variables)
+     - Work offsets (POSN) → Systems component (semantic match: coordinate systems)
+     - Machine positions (PDSP) → Axes component (semantic match: axis positions)
+
+2. **Probe XML (Device Structure)**
+   - Add DataItem definitions for all parsed data
+   - **Create or identify appropriate component** for this data type:
+     - If component doesn't exist, create new `<ComponentName>` in `<Components>` section
+     - If component exists, add DataItemRef to existing component
+     - **DO NOT** add to unrelated components (e.g., don't put macro variables in ToolMagazine)
+   - **Position data items**: Always use `units="MILLIMETER"` (MTConnect standard)
+   - **Rotary position data items**: Use `type="POSITION"` with `subType="ACTUAL"` and `units="DEGREE"` (NOT `ROTARY_VELOCITY`)
+   - Use consistent ID naming: `{type}_{identifier}_{axis}` (e.g., `work_offset_g54_x`)
+   - If ranges vary by version, define max range in probe XML (e.g., X01-X300 for D00)
+   - **DataItem type selection**:
+     - Tool data → `type="TOOL_MAGAZINE"`
+     - Macro variables → `type="PROGRAM"` (or appropriate type for variable data)
+     - Position data → `type="POSITION"`
+     - Counter data → `type="PART_COUNT"`
+     - Choose type based on semantic meaning, not by copying from similar-looking data
+
+3. **Current XML (Data Values)**
+   - Extract values from `_latestData` dictionary
+   - **CRITICAL: Output ALL parsed fields** - every field that was parsed must be included in the output
+   - **Create separate ComponentStream** for this data type's component:
+     - Use `<ComponentStream component="{ComponentName}">` matching the component from probe XML
+     - **DO NOT** add to unrelated ComponentStreams (e.g., don't put macro variables in Systems ComponentStream)
+     - Each file type should have its own ComponentStream section
+   - **Apply unit conversion**: Use `ConvertPositionValue()` for all X, Y, Z position values if unit system is Inch
+   - **Rotary axes**: Output as `<Position>` with `subType="ACTUAL"`, NOT `<RotaryVelocity>`
+   - **For aggregated data** (like tool table): Include all fields in the pipe-delimited format
+     - Example: `T1,LEN=127.0,DIA=12.7,LIFE=850,LIFELIMIT=1000,NAME=End Mill,TYPE=1,...`
+     - **DO NOT** create "summary" outputs that omit fields - include everything
+   - **Output element selection**:
+     - Tool data → `<ToolMagazine>` element
+     - Macro variables → `<Program>` element (or appropriate element for variable data)
+     - Position data → `<Position>` element
+     - Choose element based on DataItem type and semantic meaning
+   - Optional fields (like wear offsets) should still be included if they exist (even if zero)
+   - Use `EscapeXml()` for all string values
+
+4. **Unit Conversion**
+   - All position values (X, Y, Z) must be in millimeters for MTConnect
+   - Use `ConvertPositionValue()` helper method in `MTConnectServer`
+   - Conversion: `inches * 25.4 = millimeters`
+   - Rotary axes (A, B, C) are in degrees and do NOT need conversion
+
+### Step 5: Program.cs Integration
+
+1. **File Loading**
+   - If unit-aware filename: Use `fileLoader.Load{FileType}File()` instead of `LoadFile()`
+   - Pass data bank number if applicable
+   - Handle version-specific filenames if needed (use schema config to determine filename)
+   - Add file loading code in the appropriate data collection loop
+
+2. **Data Updates**
+   - Call `mtconnectServer.UpdateData(parsedData)` after parsing
+   - Ensure data keys match what MTConnectServer expects
+
+3. **Project File Updates**
+   - If new files were created (e.g., schema config classes), verify they are included in `BrotherConnection.csproj`
+   - Check that all new `.cs` files are properly referenced in the project
+
+### Step 6: Validation Checklist
+
+Before considering the update complete:
+
+- [ ] **Schema documentation reviewed and ALL fields identified**
+- [ ] **Complete field inventory created** (list all fields from both C00 and D00 schemas)
+- [ ] Schema config class created/updated with C00 and D00 definitions
+- [ ] FileLoader parse method uses schema config
+- [ ] **Parse method extracts ALL fields from schema documentation**
+- [ ] **All parsed fields are added to result dictionary with descriptive keys**
+- [ ] **All parsed fields are included in output string/format** (for aggregated outputs)
+- [ ] Unit system detection affects file loading (if applicable)
+- [ ] All position values converted to millimeters (if unit-aware)
+- [ ] **Appropriate MTConnect component determined** for this data type (e.g., Variables, Systems, ToolMagazine)
+- [ ] **Component assignment evaluated independently** (not copied from other file types)
+- [ ] Probe XML includes all data items with correct types in appropriate component
+- [ ] Current XML outputs values correctly in separate ComponentStream
+- [ ] **Current XML includes ALL parsed fields** (not just a subset)
+- [ ] **ComponentStream matches component from probe XML** (e.g., Variables component → Variables ComponentStream)
+- [ ] Logging indicates which schema/unit system is being used
+- [ ] **Verification**: Compare output against schema documentation to ensure no fields are missing
+- [ ] No linter errors
+- [ ] MTConnect XML validates against schema (user needs to push and review xml validation result)
+- [ ] **Program.cs updated** with file loading integration (version-specific filename handling if needed)
+- [ ] **BrotherConnection.csproj updated** if new files were added to the project
+- [ ] **README.md updated** with all changes (file type, version/unit awareness, fields, examples)
+- [ ] **Documentation reviewed** for consistency and completeness
+
+### Step 7: Documentation
+
+**CRITICAL: Repository documentation MUST be updated with each change.**
+
+Update `README.md` (minimum requirement):
+- Add file type to "Data Sources" section
+- Note version/unit awareness (filename variations, schema differences)
+- Document all parsed fields and output format
+- Update "Supported Data Items" section if new data items are added
+- Include examples of output format showing all fields
+- Document any special parsing considerations
+- Note any version-specific features (e.g., D00-only fields)
+
+**Documentation updates are mandatory** - do not skip this step. Review the entire README to ensure consistency and completeness.
+
+## Field Completeness Requirements
+
+**CRITICAL RULE: Parse and Output ALL Fields from Schema Documentation**
+
+When working with any Brother CNC file type:
+
+1. **Schema Review**: Before implementing parsing, create a complete inventory of ALL fields documented in the schema
+   - Include fields that may be "optional" in practice
+   - Note version-specific fields (only in C00 or only in D00)
+   - Document field positions for each version
+
+2. **Parsing**: Extract and store ALL fields
+   - Every field in the schema documentation must be parsed
+   - Store in result dictionary with descriptive keys
+   - Apply unit conversion where applicable
+
+3. **Output**: Include ALL parsed fields in MTConnect output
+   - For individual DataItems: Each field should have its own DataItem or be part of a composite output
+   - For aggregated outputs (tool table, ATC table, etc.): Include ALL fields in the output format
+   - Example: Tool table should include length, diameter, life, type, name, group, position offsets, etc.
+   - **DO NOT create "summary" outputs** that only include a subset of available fields
+
+4. **Validation**: After implementation, verify completeness
+   - Compare parsed output against schema documentation
+   - Ensure no fields are missing
+   - Check that version-specific fields are handled correctly
+
+**Why This Matters:**
+- Users expect complete data from MTConnect adapters
+- Missing fields may be critical for applications consuming the data
+- Schema documentation represents the complete data model - adapters should reflect that
+
+## Common Patterns
+
+### Offset Naming Normalization
+```csharp
+// C00: G54, X01, H01, B01
+// D00: G054, X001, H001, B001
+// Normalize to: G54, X1, H1, B1 (remove leading zeros)
+```
+
+### Unit Conversion Pattern
+```csharp
+// In MTConnectServer.GenerateCurrentXml()
+string value = ConvertPositionValue(
+    _latestData.ContainsKey("Key") ? _latestData["Key"] : "0"
+);
+```
+
+### Schema Config Pattern
+```csharp
+public static {FileType}SchemaConfig C00 = new {FileType}SchemaConfig
+{
+    CoordinateFieldLength = 9,
+    WorkOffsetFormat = "G{0}",
+    ExtendedOffsetRange = new OffsetRange(1, 48),
+    // ... other properties
+    // CRITICAL: Include ALL field-related properties from schema documentation
+};
+```
+
+### Complete Field Parsing Pattern
+```csharp
+// Parse method should extract ALL fields from schema
+// Example for tool table (TOLN):
+// - Tool number (field 0)
+// - Tool length offset (field 1) - CONVERT TO MM
+// - T length wear offset (field 2) - CONVERT TO MM
+// - Cutter compensation/diameter (field 3) - CONVERT TO MM
+// - Cutter wear offset (field 4) - CONVERT TO MM
+// - Tool life unit (field 5)
+// - Initial tool life (field 6)
+// - Tool life warning (field 7)
+// - Tool life remaining (field 8)
+// - Tool name (field 9)
+// - ... and so on for ALL fields
+
+// Store ALL fields in result dictionary
+result[$"Tool {normalizedToolNum} Length"] = lenMm;
+result[$"Tool {normalizedToolNum} Life"] = life;
+// ... etc for all fields
+
+// Include ALL fields in output string/builder
+toolData.Append($"LEN={lenMm},");
+toolData.Append($"LIFE={life},");
+toolData.Append($"LIFELIMIT={lifeLimit},");
+// ... etc for all fields
+```
+
+## MTConnect Compliance Rules
+
+1. **Component Assignment**: Each file type must be assigned to the appropriate MTConnect component based on semantic meaning
+   - Evaluate each data type independently
+   - Do NOT copy component assignments from other file types
+   - Use semantic matching: tool data → ToolMagazine, macro variables → Variables, offsets → Systems, etc.
+
+2. **Units**: All position data MUST be in `MILLIMETER` units
+3. **Rotary Positions**: Use `POSITION` type with `subType="ACTUAL"` and `units="DEGREE"`
+4. **Rotary Velocities**: Use `ROTARY_VELOCITY` type with `units="REVOLUTION/MINUTE"` (for spindle speed, not positions)
+5. **Data Item IDs**: Must be unique, descriptive, and consistent
+6. **Coordinate Systems**: Use `coordinateSystem="WORK"` for work offsets, `coordinateSystem="MACHINE"` for machine coordinates
+7. **Component Consistency**: Component name in probe XML must match ComponentStream component name in current XML
+
+## File Type Reference
+
+### Currently Supported Files
+- **PDSP** (ProductionData3): Real-time data, unit-aware, version-specific mapping files → Axes/Spindle/Path components
+- **MEM**: Program name, unitless → Controller component
+- **ALARM**: Alarm data, unitless → Controller component
+- **WKCNTR**: Workpiece counters, unitless → Controller component
+- **TOLNI1/TOLNM1**: Tool table, unit-aware filename → ToolMagazine component
+- **ATCTL/ATCTLD**: ATC tools, unitless, version-specific filename (ATCTL for C00, ATCTLD for D00) → ToolMagazine component
+- **POSNI1/POSNM1**: Work offsets, unit-aware filename, version-aware schema → Systems component
+- **MONTR**: Monitor data, unitless → Controller component
+- **PANEL**: Panel data, unitless → Controller component
+- **MCRNI1/MCRNM1**: Macro variables, unit-aware filename, version-aware schema → Variables component
+
+### Detection Files
+- **PRDC2/PRDD2**: Control version detection (C00/D00)
+- **MSRRSC/MSRRSD**: Unit system detection (Metric/Inch)
+

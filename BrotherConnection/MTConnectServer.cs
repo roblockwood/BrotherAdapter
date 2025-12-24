@@ -245,6 +245,8 @@ namespace BrotherConnection
         <DataItem id=""work_counter_4"" type=""PART_COUNT"" category=""SAMPLE"" />
         <DataItem id=""tool_table"" type=""TOOL_MAGAZINE"" category=""EVENT"" />
         <DataItem id=""atc_table"" type=""TOOL_MAGAZINE"" category=""EVENT"" />
+        <DataItem id=""atc_stockers"" type=""TOOL_MAGAZINE"" category=""EVENT"" />
+        <DataItem id=""macro_variables"" type=""PROGRAM"" category=""EVENT"" />
         <DataItem id=""work_offset_g54_x"" type=""POSITION"" category=""SAMPLE"" subType=""ACTUAL"" units=""MILLIMETER"" coordinateSystem=""WORK"" />
         <DataItem id=""work_offset_g54_y"" type=""POSITION"" category=""SAMPLE"" subType=""ACTUAL"" units=""MILLIMETER"" coordinateSystem=""WORK"" />
         <DataItem id=""work_offset_g54_z"" type=""POSITION"" category=""SAMPLE"" subType=""ACTUAL"" units=""MILLIMETER"" coordinateSystem=""WORK"" />
@@ -685,8 +687,14 @@ namespace BrotherConnection
           <DataItemRef dataItemId=""work_counter_4"" />
           <DataItemRef dataItemId=""tool_table"" />
           <DataItemRef dataItemId=""atc_table"" />
+          <DataItemRef dataItemId=""atc_stockers"" />
         </DataItemRefs>
         </Controller>
+        <Variables id=""variables"" name=""variables"">
+          <DataItemRefs>
+            <DataItemRef dataItemId=""macro_variables"" />
+          </DataItemRefs>
+        </Variables>
         <Systems id=""systems"" name=""systems"">
           <DataItemRefs>
             <DataItemRef dataItemId=""work_offset_g54_x"" />
@@ -1211,8 +1219,14 @@ namespace BrotherConnection
                 // Tool table (from TOLNI1 file) - complete tool definitions
                 string toolTable = _latestData.ContainsKey("Tool table") ? _latestData["Tool table"] : "";
                 
-                // ATC table (from ATCTL file) - tools currently loaded in ATC magazine
+                // ATC table (from ATCTL/ATCTLD file) - tools currently loaded in ATC magazine
                 string atcTable = _latestData.ContainsKey("ATC Tools") ? _latestData["ATC Tools"] : "";
+                
+                // ATC stockers (from ATCTLD file, D00 only) - tool stockers (right and left)
+                string atcStockers = _latestData.ContainsKey("ATC Stockers") ? _latestData["ATC Stockers"] : "";
+                
+                // Macro variables (from MCRNun file - MCRNI for Inch, MCRNM for Metric) - C500-C999
+                string macroVariables = _latestData.ContainsKey("Macro Variables") ? _latestData["Macro Variables"] : "";
                 
                 // Work offsets (from POSN file - POSNI for Inch, POSNM for Metric) - G54-G59 (C00) or G054-G059 (D00)
                 string g54_x = ConvertPositionValue(_latestData.ContainsKey("Work offset G54 X") ? _latestData["Work offset G54 X"] : "0");
@@ -1581,6 +1595,12 @@ namespace BrotherConnection
         <Events>
           <ToolMagazine dataItemId=""tool_table"" timestamp=""{timestamp}"">{EscapeXml(toolTable)}</ToolMagazine>
           <ToolMagazine dataItemId=""atc_table"" timestamp=""{timestamp}"">{EscapeXml(atcTable)}</ToolMagazine>
+          <ToolMagazine dataItemId=""atc_stockers"" timestamp=""{timestamp}"">{EscapeXml(atcStockers)}</ToolMagazine>
+        </Events>
+      </ComponentStream>
+      <ComponentStream component=""Variables"" name=""variables"">
+        <Events>
+          <Program dataItemId=""macro_variables"" timestamp=""{timestamp}"">{EscapeXml(macroVariables)}</Program>
         </Events>
       </ComponentStream>
       <ComponentStream component=""Controller"" name=""controller_times"">

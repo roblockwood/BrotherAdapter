@@ -30,7 +30,12 @@ jobs:
       - name: Setup Mono
         run: |
           sudo apt-get update
-          sudo apt-get install -y mono-complete ca-certificates-mono
+          sudo apt-get install -y mono-complete ca-certificates-mono msbuild
+          
+          # Verify MSBuild installation
+          echo "Checking for MSBuild installation..."
+          which msbuild || echo "msbuild not in PATH"
+          find /usr -name "MSBuild.dll" 2>/dev/null | head -5 || echo "No MSBuild.dll found"
           
       - name: Install NuGet
         run: |
@@ -38,15 +43,66 @@ jobs:
           chmod +x nuget.exe
           sudo mv nuget.exe /usr/local/bin/
 
+      - name: Restore NuGet packages
+        run: |
+          # Use nuget install with explicit output directory
+          # This should work without MSBuild detection
+          cd BrotherConnection && \
+          mono /usr/local/bin/nuget.exe install packages.config -OutputDirectory ../packages -NonInteractive -NoCache || \
+          (echo "NuGet install failed, trying manual download..." && \
+           cd .. && \
+           mkdir -p packages/Newtonsoft.Json.10.0.3/lib/net45 && \
+           curl -L https://www.nuget.org/api/v2/package/Newtonsoft.Json/10.0.3 -o /tmp/newtonsoft.nupkg && \
+           unzip -q /tmp/newtonsoft.nupkg -d /tmp/newtonsoft && \
+           cp /tmp/newtonsoft/lib/net45/Newtonsoft.Json.dll packages/Newtonsoft.Json.10.0.3/lib/net45/ && \
+           rm -rf /tmp/newtonsoft /tmp/newtonsoft.nupkg)
+
       - name: Setup MSBuild
         id: msbuild_setup
         run: |
-          # Find MSBuild.dll and its directory
-          MSBUILD_DLL=$(find /usr/lib/mono -name "MSBuild.dll" 2>/dev/null | head -1)
+          # Find MSBuild.dll - search common locations
+          echo "Searching for MSBuild.dll..."
+          
+          # Try multiple possible locations
+          POSSIBLE_PATHS=(
+            "/usr/lib/mono/msbuild/15.0/bin/MSBuild.dll"
+            "/usr/lib/mono/msbuild/Current/bin/MSBuild.dll"
+            "/usr/lib/mono/4.5/msbuild.exe"
+            "$(find /usr/lib/mono -name "MSBuild.dll" 2>/dev/null | head -1)"
+            "$(find /usr/lib/mono -name "msbuild.exe" 2>/dev/null | head -1)"
+            "$(find /usr -name "MSBuild.dll" 2>/dev/null | head -1)"
+          )
+          
+          MSBUILD_DLL=""
+          for path in "${POSSIBLE_PATHS[@]}"; do
+            if [ -n "$path" ] && [ -f "$path" ]; then
+              MSBUILD_DLL="$path"
+              echo "Found MSBuild at: $MSBUILD_DLL"
+              break
+            fi
+          done
+          
           if [ -z "$MSBUILD_DLL" ]; then
-            echo "MSBuild.dll not found, attempting to locate..."
-            MSBUILD_DLL="/usr/lib/mono/msbuild/15.0/bin/MSBuild.dll"
+            echo "MSBuild.dll not found, trying to install msbuild package..."
+            # Try installing msbuild package
+            sudo apt-get install -y msbuild || echo "msbuild package not available"
+            
+            # Search again after potential installation
+            MSBUILD_DLL=$(find /usr/lib/mono -name "MSBuild.dll" 2>/dev/null | head -1)
+            MSBUILD_DLL=${MSBUILD_DLL:-$(find /usr -name "MSBuild.dll" 2>/dev/null | head -1)}
+            
+            if [ -z "$MSBUILD_DLL" ] || [ ! -f "$MSBUILD_DLL" ]; then
+              echo "ERROR: MSBuild.dll still not found after installation attempt"
+              echo "Listing Mono installation directories:"
+              ls -la /usr/lib/mono/ 2>/dev/null || echo "Cannot list /usr/lib/mono/"
+              echo "Searching for any MSBuild files:"
+              find /usr/lib/mono -name "*msbuild*" -o -name "*MSBuild*" 2>/dev/null | head -10
+              echo "Checking if xbuild is available as fallback..."
+              which xbuild || echo "xbuild not found"
+              exit 1
+            fi
           fi
+          
           MSBUILD_DIR=$(dirname "$MSBUILD_DLL")
           
           # Export MSBuild info for later use
@@ -55,23 +111,34 @@ jobs:
           echo "MSBuild directory: $MSBUILD_DIR"
           echo "MSBuild DLL: $MSBUILD_DLL"
 
-      - name: Restore NuGet packages
-        run: |
-          # Restore packages directly from packages.config (doesn't require MSBuild)
-          # This avoids MSBuild auto-detection issues
-          cd BrotherConnection && \
-          mono /usr/local/bin/nuget.exe install packages.config -OutputDirectory ../packages -NonInteractive
-
       - name: Setup MSBuild wrapper for build
         run: |
+          # Verify MSBuild DLL exists before creating wrapper
+          if [ ! -f "$MSBUILD_DLL" ]; then
+            echo "ERROR: MSBuild DLL not found at: $MSBUILD_DLL"
+            echo "Trying to locate MSBuild..."
+            find /usr -name "MSBuild.dll" 2>/dev/null | head -5
+            exit 1
+          fi
+          
           # Create wrapper script now that NuGet restore is done
           echo "#!/bin/bash" | sudo tee /usr/local/bin/msbuild
           echo "mono \"$MSBUILD_DLL\" \"\$@\"" | sudo tee -a /usr/local/bin/msbuild
           sudo chmod +x /usr/local/bin/msbuild
+          
+          # Test the wrapper
+          /usr/local/bin/msbuild -version || echo "MSBuild wrapper test failed"
 
       - name: Build project
         working-directory: BrotherConnection
-        run: msbuild ../BrotherConnection.sln /p:Configuration=Release /p:Platform="Any CPU" /t:Build /nologo /verbosity:minimal
+        run: |
+          # Try MSBuild first, fallback to xbuild if MSBuild fails
+          if command -v msbuild >/dev/null 2>&1; then
+            msbuild ../BrotherConnection.sln /p:Configuration=Release /p:Platform="Any CPU" /t:Build /nologo /verbosity:minimal
+          else
+            echo "MSBuild not found, trying xbuild as fallback..."
+            xbuild ../BrotherConnection.sln /p:Configuration=Release /p:Platform="Any CPU" /t:Build /nologo /verbosity:minimal
+          fi
 
       - name: Verify schema files exist
         run: |
